@@ -946,7 +946,8 @@
       var actions = (r.status==='pendiente'
         ? '<button class="btn btn-success btn-sm" onclick="App.reviewRequest(\''+r.id+'\',\'aprobado\')">Aprobar</button> <button class="btn btn-danger btn-sm" onclick="App.reviewRequest(\''+r.id+'\',\'rechazado\')">Rechazar</button> '
         : '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.reviewedBy||'')+'</span> ') +
-        '<button class="btn btn-subtle btn-sm" onclick="App.startEditRequest(\''+r.id+'\')">Editar</button>';
+        '<button class="btn btn-subtle btn-sm" onclick="App.startEditRequest(\''+r.id+'\')">Editar</button> ' +
+        '<button class="btn btn-danger btn-sm" onclick="App.removeRequest(\''+r.id+'\')">Eliminar</button>';
       var checkbox = r.status==='aprobado'
         ? '<input type="checkbox" '+(selectedForIngram.has(r.id)?'checked':'')+' onchange="App.toggleIngramSelect(\''+r.id+'\', this.checked)" />'
         : '';
@@ -1225,7 +1226,8 @@
         '<td class="num">'+money(reqTotal(r))+'</td>' +
         '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
         '<td style="color:var(--ink-subtle)">'+esc(r.reviewedBy||'—')+'</td>' +
-        '<td><button class="btn btn-subtle btn-sm" onclick="App.startEditRequest(\''+r.id+'\')">Editar</button></td>' +
+        '<td><button class="btn btn-subtle btn-sm" onclick="App.startEditRequest(\''+r.id+'\')">Editar</button> ' +
+          '<button class="btn btn-danger btn-sm" onclick="App.removeRequest(\''+r.id+'\')">Eliminar</button></td>' +
       '</tr>';
     }).join('');
 
@@ -1442,6 +1444,12 @@
         if(type){ r.licenseTypeId = type.id; r.licenseTypeName = type.name; r.price = type.price; }
       });
       showToast('Solicitud actualizada.', 'success');
+    },
+    removeRequest: function(id){
+      if(!confirm('¿Eliminar esta solicitud? Esta acción no se puede deshacer.')) return;
+      commit(function(s){ s.requests = s.requests.filter(function(x){ return x.id!==id; }); });
+      selectedForIngram.delete(id);
+      showToast('Solicitud eliminada.', 'success');
     },
 
     setIngramEmail: function(val){
