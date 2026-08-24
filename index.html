@@ -376,6 +376,8 @@
   var solFilter = { cliente: 'todos', estado: 'todos' };
   var selectedForIngram = new Set();
   var editingRequestId = null;
+  var editingClientId = null;
+  var visibleClientPasswords = {};
   var currentTheme = 'light';
   var forgotPasswordOpen = false;
   var forgotPasswordSent = false;
@@ -940,14 +942,32 @@
   function renderAdminClientes(){
     var rows = STATE.users.filter(function(u){ return u.role==='client'; }).map(function(u){
       var reqCount = STATE.requests.filter(function(r){ return r.clientUsername===u.username; }).length;
+
+      if(editingClientId===u.id){
+        return '<tr class="editing-row">' +
+          '<td><input class="mini-input" id="edit-client-name-'+u.id+'" value="'+esc(u.name)+'" /></td>' +
+          '<td><input class="mini-input mono" id="edit-client-username-'+u.id+'" value="'+esc(u.username)+'" /></td>' +
+          '<td colspan="3"><input class="mini-input mono" id="edit-client-password-'+u.id+'" value="'+esc(u.password)+'" placeholder="Contraseña" /></td>' +
+          '<td>' +
+            '<button class="btn btn-primary btn-sm" onclick="App.saveEditClient(\''+u.id+'\')">Guardar</button> ' +
+            '<button class="btn btn-ghost btn-sm" onclick="App.cancelEditClient()">Cancelar</button>' +
+          '</td>' +
+        '</tr>';
+      }
+
+      var pwVisible = !!visibleClientPasswords[u.id];
+      var pwCell = '<span class="mono">'+(pwVisible ? esc(u.password) : '••••••••')+'</span> ' +
+        '<button type="button" class="btn btn-ghost btn-sm" onclick="App.toggleClientPasswordVisible(\''+u.id+'\')">'+(pwVisible?'Ocultar':'Ver')+'</button>';
+
       return '<tr>' +
         '<td class="lt-name">'+esc(u.name)+'</td>' +
         '<td class="mono">'+esc(u.username)+'</td>' +
+        '<td>'+pwCell+'</td>' +
         '<td><span class="pill status-'+(u.active?'activo':'bloqueado')+'">'+(u.active?'activo':'bloqueado')+'</span></td>' +
         '<td style="color:var(--ink-subtle)">'+reqCount+' solicitud'+(reqCount===1?'':'es')+'</td>' +
         '<td>' +
           '<button class="btn btn-subtle btn-sm" onclick="App.toggleUserActive(\''+u.id+'\')">'+(u.active?'Bloquear':'Activar')+'</button> ' +
-          '<button class="btn btn-ghost btn-sm" onclick="App.resetPassword(\''+u.id+'\')">Restablecer clave</button> ' +
+          '<button class="btn btn-ghost btn-sm" onclick="App.startEditClient(\''+u.id+'\')">Editar</button> ' +
           '<button class="btn btn-danger btn-sm" '+(reqCount>0?'disabled title="Tiene solicitudes asociadas"':'onclick="App.removeUser(\''+u.id+'\')"')+'>Eliminar</button>' +
         '</td>' +
       '</tr>';
@@ -965,7 +985,7 @@
         '</form>' +
       '</div>' +
       '<div class="card">' +
-        '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Usuario</th><th>Estado</th><th>Uso</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Usuario</th><th>Contraseña</th><th>Estado</th><th>Uso</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>' +
       '</div>' +
     '</div>';
   }
@@ -1502,6 +1522,40 @@
       if(!pass) return;
       commit(function(s){ var u = s.users.find(function(x){return x.id===id;}); if(u) u.password = pass; });
       showToast('Contraseña actualizada.', 'success');
+    },
+    toggleClientPasswordVisible: function(id){
+      visibleClientPasswords[id] = !visibleClientPasswords[id];
+      render();
+    },
+    startEditClient: function(id){
+      editingClientId = id;
+      render();
+    },
+    cancelEditClient: function(){
+      editingClientId = null;
+      render();
+    },
+    saveEditClient: function(id){
+      var nameEl = document.getElementById('edit-client-name-'+id);
+      var usernameEl = document.getElementById('edit-client-username-'+id);
+      var passwordEl = document.getElementById('edit-client-password-'+id);
+      var name = (nameEl.value||'').trim();
+      var username = (usernameEl.value||'').trim();
+      var password = passwordEl.value;
+      if(!name || !username || !password){ showToast('Completa nombre, usuario y contraseña.', 'error'); return; }
+      var clash = STATE.users.some(function(u){ return u.id!==id && u.username===username; });
+      if(clash){ showToast('Ese usuario ya existe.', 'error'); return; }
+      commit(function(s){
+        var u = s.users.find(function(x){ return x.id===id; });
+        if(!u) return;
+        var oldUsername = u.username;
+        u.name = name; u.username = username; u.password = password;
+        if(oldUsername!==username){
+          s.requests.forEach(function(r){ if(r.clientUsername===oldUsername) r.clientUsername = username; });
+        }
+      });
+      editingClientId = null;
+      showToast('Cliente actualizado.', 'success');
     },
     removeUser: function(id){
       commit(function(s){ s.users = s.users.filter(function(x){ return x.id!==id; }); });
