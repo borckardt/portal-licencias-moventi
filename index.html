@@ -989,14 +989,14 @@
 
       var menuItems = [];
       if(r.status==='pendiente'){
-        menuItems.push({label:'Aprobar', cls:'rm-success', onclick:"App.reviewRequest('"+r.id+"','aprobado')"});
         menuItems.push({label:'Rechazar', cls:'rm-danger', onclick:"App.reviewRequest('"+r.id+"','rechazado')"});
       }
       menuItems.push({label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"});
       menuItems.push({label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"});
-      var actions = (r.status!=='pendiente'
-        ? '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.reviewedBy||'')+'</span> '
-        : '') + buildRowMenu(r.id, menuItems);
+      var actions = (r.status==='pendiente'
+        ? '<button class="btn btn-success btn-sm" onclick="App.reviewRequest(\''+r.id+'\',\'aprobado\')">Aprobar</button> '
+        : '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.reviewedBy||'')+'</span> ') +
+        buildRowMenu(r.id, menuItems);
       var checkbox = r.status==='aprobado'
         ? '<input type="checkbox" '+(selectedForIngram.has(r.id)?'checked':'')+' onchange="App.toggleIngramSelect(\''+r.id+'\', this.checked)" />'
         : '';
