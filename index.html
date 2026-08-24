@@ -308,6 +308,30 @@
   .cal-link{ border:none; background:transparent; color:var(--accent); font-family:inherit; font-size:.8rem; font-weight:700; cursor:pointer; padding:.2em .3em; }
   .cal-link:hover{ text-decoration:underline; }
 
+  .row-menu-wrap{ position:relative; display:inline-block; }
+  .row-menu-btn{
+    border:1px solid var(--border-strong); background:var(--surface); color:var(--ink-muted);
+    width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:1.05rem; line-height:1;
+    display:inline-flex; align-items:center; justify-content:center; font-family:inherit;
+  }
+  .row-menu-btn:hover{ border-color:var(--accent); color:var(--accent); }
+  .row-menu-overlay{ position:fixed; inset:0; z-index:55; background:transparent; }
+  .row-menu{
+    position:absolute; top:calc(100% + 6px); right:0; z-index:60; min-width:160px;
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md);
+    box-shadow:0 12px 32px rgba(20,20,43,.22); padding:.35rem; display:flex; flex-direction:column; gap:.1rem;
+  }
+  .row-menu button{
+    border:none; background:transparent; text-align:left; padding:.55em .7em; border-radius:7px;
+    font-family:inherit; font-size:.84rem; font-weight:600; color:var(--ink); cursor:pointer; white-space:nowrap;
+  }
+  .row-menu button:hover{ background:var(--surface-alt); }
+  .row-menu button.rm-success{ color:#1a7f4e; }
+  .row-menu button.rm-success:hover{ background:rgba(26,127,78,.1); }
+  .row-menu button.rm-danger{ color:#c22; }
+  .row-menu button.rm-danger:hover{ background:rgba(204,34,34,.1); }
+  .row-menu-note{ color:var(--ink-subtle); font-size:.78rem; }
+
   .theme-toggle{
     display:inline-flex; align-items:center; gap:.5em; border:1px solid var(--border-strong); background:var(--surface);
     color:var(--ink-muted); border-radius:99px; padding:.4em .85em; font-size:.78rem; font-weight:600; cursor:pointer;
@@ -385,6 +409,7 @@
   var selectedForIngram = new Set();
   var editingRequestId = null;
   var editingClientId = null;
+  var openRowMenu = null;
   var visibleClientPasswords = {};
   var currentTheme = 'light';
   var forgotPasswordOpen = false;
@@ -914,6 +939,25 @@
     }).join('') + '</div>';
   }
 
+  // Menú desplegable de acciones por fila (Solicitudes/Reporte): agrupa los
+  // botones de acción (aprobar/rechazar/editar/eliminar) detrás de un botón
+  // "⋮" para que la tabla no se vea saturada de botones sueltos.
+  function buildRowMenu(rowId, items){
+    var isOpen = openRowMenu===rowId;
+    var menu = isOpen ? (
+      '<div class="row-menu-overlay" onclick="App.closeRowMenu()"></div>' +
+      '<div class="row-menu">' +
+        items.map(function(it){
+          return '<button type="button" class="'+(it.cls||'')+'" onclick="App.closeRowMenu(); '+it.onclick+'">'+esc(it.label)+'</button>';
+        }).join('') +
+      '</div>'
+    ) : '';
+    return '<div class="row-menu-wrap">' +
+      '<button type="button" class="row-menu-btn" onclick="App.toggleRowMenu(\''+rowId+'\')" aria-label="Acciones">&#8942;</button>' +
+      menu +
+    '</div>';
+  }
+
   function renderAdminSolicitudes(){
     var clients = STATE.users.filter(function(u){ return u.role==='client'; });
     var list = STATE.requests.slice().sort(function(a,b){ return new Date(b.requestedAt)-new Date(a.requestedAt); });
@@ -943,11 +987,16 @@
         '</tr>';
       }
 
-      var actions = (r.status==='pendiente'
-        ? '<button class="btn btn-success btn-sm" onclick="App.reviewRequest(\''+r.id+'\',\'aprobado\')">Aprobar</button> <button class="btn btn-danger btn-sm" onclick="App.reviewRequest(\''+r.id+'\',\'rechazado\')">Rechazar</button> '
-        : '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.reviewedBy||'')+'</span> ') +
-        '<button class="btn btn-subtle btn-sm" onclick="App.startEditRequest(\''+r.id+'\')">Editar</button> ' +
-        '<button class="btn btn-danger btn-sm" onclick="App.removeRequest(\''+r.id+'\')">Eliminar</button>';
+      var menuItems = [];
+      if(r.status==='pendiente'){
+        menuItems.push({label:'Aprobar', cls:'rm-success', onclick:"App.reviewRequest('"+r.id+"','aprobado')"});
+        menuItems.push({label:'Rechazar', cls:'rm-danger', onclick:"App.reviewRequest('"+r.id+"','rechazado')"});
+      }
+      menuItems.push({label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"});
+      menuItems.push({label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"});
+      var actions = (r.status!=='pendiente'
+        ? '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.reviewedBy||'')+'</span> '
+        : '') + buildRowMenu(r.id, menuItems);
       var checkbox = r.status==='aprobado'
         ? '<input type="checkbox" '+(selectedForIngram.has(r.id)?'checked':'')+' onchange="App.toggleIngramSelect(\''+r.id+'\', this.checked)" />'
         : '';
@@ -1226,8 +1275,10 @@
         '<td class="num">'+money(reqTotal(r))+'</td>' +
         '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
         '<td style="color:var(--ink-subtle)">'+esc(r.reviewedBy||'—')+'</td>' +
-        '<td><button class="btn btn-subtle btn-sm" onclick="App.startEditRequest(\''+r.id+'\')">Editar</button> ' +
-          '<button class="btn btn-danger btn-sm" onclick="App.removeRequest(\''+r.id+'\')">Eliminar</button></td>' +
+        '<td>'+buildRowMenu(r.id, [
+          {label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"},
+          {label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"}
+        ])+'</td>' +
       '</tr>';
     }).join('');
 
@@ -1451,6 +1502,11 @@
       selectedForIngram.delete(id);
       showToast('Solicitud eliminada.', 'success');
     },
+    toggleRowMenu: function(id){
+      openRowMenu = (openRowMenu===id) ? null : id;
+      render();
+    },
+    closeRowMenu: function(){ openRowMenu = null; render(); },
 
     setIngramEmail: function(val){
       commit(function(s){ s.settings.ingramEmail = val.trim(); });
