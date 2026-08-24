@@ -354,6 +354,9 @@
   "use strict";
 
   /* ================= state & capabilities ================= */
+  // Token compartido opcional para el endpoint /api/send-email (ver SETUP_GMAIL.md).
+  // No es un secreto fuerte: vive en el HTML de esta página. Déjalo vacío si no usas ese backend.
+  var PORTAL_API_TOKEN = 'FEn_CYyxfOZn8Q1BTXsDMxxJI-1fi9B5';
   var DEFAULT_EMAIL_SUBJECT = 'Solicitud de habilitación de licencias — Moventi ({{cantidad}} {{unidad}})';
   var DEFAULT_EMAIL_BODY = 'Hola,\n\nSe solicita generar/habilitar las siguientes licencias aprobadas:\n\n{{detalle}}\n\nSaludos,\n{{admin}}';
 
@@ -1153,9 +1156,35 @@
         '</div>';
 
       if(!mcpCap){
-        // Outside the Claude artifact runtime there's no connected Gmail —
-        // fall back to opening the admin's own default mail client with the
-        // message prefilled, so this still works standalone (e.g. on Vercel).
+        // Outside the Claude artifact runtime there's no connected Gmail via
+        // Claude — but if this build is hosted with the /api/send-email
+        // backend (see portal-licencias-vercel/api/send-email.js), try that
+        // first for true automatic sending before falling back to mailto.
+        try{
+          var apiResp = await fetch('/api/send-email', {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+            body: JSON.stringify({ to: ingramEmail, subject: subject, text: body, html: htmlBody })
+          });
+          if(apiResp.ok){
+            commit(function(s){
+              s.requests.forEach(function(r){
+                if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
+                  r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null;
+                }
+              });
+            });
+            selectedForIngram.clear();
+            render();
+            showToast('Correo enviado (' + items.length + ' solicitud' + (items.length===1?'':'es') + ').', 'success');
+            return;
+          }
+          console.warn('send-email API respondió con error, usando mailto como respaldo', await apiResp.text().catch(function(){return '';}));
+        }catch(e){
+          // No backend disponible en este hosting (p.ej. dentro del artifact de Claude) — seguimos con mailto.
+        }
+
+        // Fallback: abrir el cliente de correo del administrador con el mensaje prefijado.
         var mailto = 'mailto:' + encodeURIComponent(ingramEmail) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
         window.location.href = mailto;
         commit(function(s){
