@@ -317,7 +317,11 @@
   .row-menu-btn:hover{ border-color:var(--accent); color:var(--accent); }
   .row-menu-overlay{ position:fixed; inset:0; z-index:55; background:transparent; }
   .row-menu{
-    position:absolute; top:calc(100% + 6px); right:0; z-index:60; min-width:160px;
+    /* position:fixed y las coordenadas top/bottom/left se fijan inline en
+       buildRowMenu(), calculadas en toggleRowMenu() a partir del botón que
+       abrió el menú — así no queda recortado por el overflow-x:auto de la
+       tabla ni oculto debajo del borde inferior de la pantalla. */
+    position:fixed; z-index:60; min-width:160px;
     background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md);
     box-shadow:0 12px 32px rgba(20,20,43,.22); padding:.35rem; display:flex; flex-direction:column; gap:.1rem;
   }
@@ -410,6 +414,7 @@
   var editingRequestId = null;
   var editingClientId = null;
   var openRowMenu = null;
+  var rowMenuPos = null;
   var visibleClientPasswords = {};
   var currentTheme = 'light';
   var forgotPasswordOpen = false;
@@ -944,16 +949,26 @@
   // "⋮" para que la tabla no se vea saturada de botones sueltos.
   function buildRowMenu(rowId, items){
     var isOpen = openRowMenu===rowId;
+    // Posición calculada al abrir el menú (ver toggleRowMenu), en coordenadas
+    // de viewport con position:fixed: así el menú no queda recortado por el
+    // overflow-x:auto de la tabla (que en la práctica también recorta el eje
+    // vertical) ni oculto debajo del borde inferior de la pantalla en filas
+    // cercanas al final de la tabla.
+    var style = '';
+    if(isOpen && rowMenuPos){
+      style = 'position:fixed; left:'+rowMenuPos.left+'px; ' +
+        (rowMenuPos.dir==='up' ? 'bottom:'+rowMenuPos.y+'px;' : 'top:'+rowMenuPos.y+'px;');
+    }
     var menu = isOpen ? (
       '<div class="row-menu-overlay" onclick="App.closeRowMenu()"></div>' +
-      '<div class="row-menu">' +
+      '<div class="row-menu" style="'+style+'">' +
         items.map(function(it){
           return '<button type="button" class="'+(it.cls||'')+'" onclick="App.closeRowMenu(); '+it.onclick+'">'+esc(it.label)+'</button>';
         }).join('') +
       '</div>'
     ) : '';
     return '<div class="row-menu-wrap">' +
-      '<button type="button" class="row-menu-btn" onclick="App.toggleRowMenu(\''+rowId+'\')" aria-label="Acciones">&#8942;</button>' +
+      '<button type="button" class="row-menu-btn" onclick="App.toggleRowMenu(\''+rowId+'\', event)" aria-label="Acciones">&#8942;</button>' +
       menu +
     '</div>';
   }
@@ -1502,11 +1517,23 @@
       selectedForIngram.delete(id);
       showToast('Solicitud eliminada.', 'success');
     },
-    toggleRowMenu: function(id){
-      openRowMenu = (openRowMenu===id) ? null : id;
+    toggleRowMenu: function(id, evt){
+      if(openRowMenu===id){
+        openRowMenu = null; rowMenuPos = null;
+      } else {
+        var rect = evt.currentTarget.getBoundingClientRect();
+        var menuHeightEstimate = 170; // suficiente para hasta ~4 opciones
+        var openUp = (window.innerHeight - rect.bottom) < menuHeightEstimate && rect.top > menuHeightEstimate;
+        openRowMenu = id;
+        rowMenuPos = {
+          left: Math.max(8, rect.right - 160),
+          dir: openUp ? 'up' : 'down',
+          y: openUp ? (window.innerHeight - rect.top + 6) : (rect.bottom + 6)
+        };
+      }
       render();
     },
-    closeRowMenu: function(){ openRowMenu = null; render(); },
+    closeRowMenu: function(){ openRowMenu = null; rowMenuPos = null; render(); },
 
     setIngramEmail: function(val){
       commit(function(s){ s.settings.ingramEmail = val.trim(); });
