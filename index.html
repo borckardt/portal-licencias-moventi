@@ -357,6 +357,8 @@
   // Token compartido opcional para el endpoint /api/send-email (ver SETUP_GMAIL.md).
   // No es un secreto fuerte: vive en el HTML de esta página. Déjalo vacío si no usas ese backend.
   var PORTAL_API_TOKEN = 'FEn_CYyxfOZn8Q1BTXsDMxxJI-1fi9B5';
+  // A dónde llega el aviso automático de "nueva solicitud creada por un cliente".
+  var NEW_REQUEST_NOTIFY_EMAILS = ['sborckardt@moventiglobal.com', 'administracion@moventiglobal.com'];
   var DEFAULT_EMAIL_SUBJECT = 'Solicitud de habilitación de licencias — Moventi ({{cantidad}} {{unidad}})';
   var DEFAULT_EMAIL_BODY = 'Hola,\n\nSe solicita generar/habilitar las siguientes licencias aprobadas:\n\n{{detalle}}\n\nSaludos,\n{{admin}}';
 
@@ -416,6 +418,54 @@
     if(lastIndex < src.length) out += esc(src.slice(lastIndex)).replace(/\n/g, '<br>');
     return out;
   }
+  // Envío de correo "mejor esfuerzo": intenta el backend /api/send-email
+  // (Vercel), luego el conector de Gmail de Claude si está disponible, y si
+  // ninguno existe simplemente no hace nada — nunca interrumpe al usuario ni
+  // abre un cliente de correo por su cuenta, porque esto corre automático
+  // (no a partir de un clic explícito de "enviar").
+  async function sendEmailBestEffort(toList, subject, text, html){
+    var to = toList.join(', ');
+    try{
+      var apiResp = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+        body: JSON.stringify({ to: to, subject: subject, text: text, html: html })
+      });
+      if(apiResp.ok) return true;
+    }catch(e){ /* backend no disponible en este hosting, seguimos abajo */ }
+    if(mcpCap){
+      try{
+        await mcpCap.callTool('Gmail', 'send_message', { to: toList, subject: subject, body: text, htmlBody: html });
+        return true;
+      }catch(e){ /* sin Gmail conectado en este contexto; fallamos en silencio */ }
+    }
+    return false;
+  }
+
+  function notifyNewRequest(r){
+    var subject = 'Nueva solicitud de licencia — ' + r.clientName + ' (' + (r.quantity||1) + ' ' + ((r.quantity||1)===1?'licencia':'licencias') + ')';
+    var text = 'Se registró una nueva solicitud de licencia:\n\n' +
+      '- Cliente: ' + r.clientName + '\n' +
+      '- Tipo: ' + r.licenseTypeName + '\n' +
+      '- Cantidad: ' + (r.quantity||1) + '\n' +
+      '- Necesaria desde: ' + fmtDateShort(r.neededFrom) + '\n' +
+      (r.note ? ('- Nota del cliente: ' + r.note + '\n') : '') +
+      '\nIngresa al portal para revisarla y aprobarla.';
+    var html = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
+      '<p>Se registró una nueva solicitud de licencia:</p>' +
+      '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
+      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Necesaria desde</th></tr>' +
+      '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center">'+(r.quantity||1)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+fmtDateShort(r.neededFrom)+'</td></tr>' +
+      '</table>' +
+      (r.note ? ('<p><strong>Nota del cliente:</strong> '+esc(r.note)+'</p>') : '') +
+      '<p>Ingresa al portal para revisarla y aprobarla.</p>' +
+      '</div>';
+    sendEmailBestEffort(NEW_REQUEST_NOTIFY_EMAILS, subject, text, html);
+  }
+
   function reqTotal(r){ return Number(r.price||0) * Number(r.quantity||1); }
   function fmtDate(iso){ if(!iso) return '—'; var d = new Date(iso); return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'}); }
   function fmtDateShort(ymd){ if(!ymd) return '—'; var p = ymd.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
@@ -1046,23 +1096,23 @@
       var typeId = f.licenseTypeId.value;
       var type = STATE.licenseTypes.find(function(t){ return t.id===typeId; });
       var qty = Math.max(1, parseInt(f.quantity.value, 10) || 1);
-      commit(function(s){
-        s.requests.push({
-          id: uid('r'),
-          clientUsername: user.username,
-          clientName: user.name,
-          licenseTypeId: typeId,
-          licenseTypeName: type ? type.name : '—',
-          price: type ? type.price : 0,
-          quantity: qty,
-          neededFrom: f.neededFrom.value,
-          note: f.note.value.trim(),
-          requestedAt: new Date().toISOString(),
-          status: 'pendiente', reviewedBy: null, reviewedAt: null,
-          notifiedToIngram: false, notifiedAt: null, notifiedBy: null
-        });
-      });
+      var newReq = {
+        id: uid('r'),
+        clientUsername: user.username,
+        clientName: user.name,
+        licenseTypeId: typeId,
+        licenseTypeName: type ? type.name : '—',
+        price: type ? type.price : 0,
+        quantity: qty,
+        neededFrom: f.neededFrom.value,
+        note: f.note.value.trim(),
+        requestedAt: new Date().toISOString(),
+        status: 'pendiente', reviewedBy: null, reviewedAt: null,
+        notifiedToIngram: false, notifiedAt: null, notifiedBy: null
+      };
+      commit(function(s){ s.requests.push(newReq); });
       showToast('Solicitud enviada.', 'success');
+      notifyNewRequest(newReq);
     },
 
     reviewRequest: function(id, status){
