@@ -364,6 +364,14 @@
 
   var STATE = JSON.parse(document.getElementById('app-state').textContent);
   if(!STATE.settings) STATE.settings = { ingramEmail: '' };
+  // Cuando corremos como sitio Vercel (fuera del runtime de artifacts de
+  // Claude), los datos compartidos (clientes, solicitudes, tipos de
+  // licencia) viven en Vercel Blob vía /api/get-state y /api/save-state, así
+  // que cualquier navegador/dispositivo ve el mismo dato. baseRemoteState
+  // guarda el último snapshot conocido del backend, usado para fusionar
+  // cambios concurrentes en vez de pisarlos (ver mergeCollection).
+  var stateBackendAvailable = false;
+  var baseRemoteState = null;
   if(!STATE.settings.emailSubjectTemplate) STATE.settings.emailSubjectTemplate = DEFAULT_EMAIL_SUBJECT;
   if(!STATE.settings.emailBodyTemplate) STATE.settings.emailBodyTemplate = DEFAULT_EMAIL_BODY;
   var emailTplOpen = false;
@@ -531,13 +539,100 @@
     try{ localStorage.setItem('moventi_portal_state_v1', JSON.stringify(STATE)); }catch(e){}
   }
 
+  function portalApiHeaders(extra){
+    return Object.assign({}, extra||{}, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {});
+  }
+
+  // Trae el estado compartido guardado en el backend (Vercel Blob).
+  // Devuelve { state } si hay backend disponible (state puede ser null si
+  // aún no se ha guardado nada), o null si el backend no responde (por
+  // ejemplo, corriendo este HTML fuera de Vercel, sin las funciones /api/*).
+  async function fetchRemoteState(){
+    try{
+      var resp = await fetch('/api/get-state', { headers: portalApiHeaders(), cache: 'no-store' });
+      if(!resp.ok) return null;
+      var data = await resp.json();
+      if(!data || !data.ok) return null;
+      return { state: data.state || null };
+    }catch(e){ return null; }
+  }
+  async function saveRemoteState(state){
+    var resp = await fetch('/api/save-state', {
+      method: 'POST',
+      headers: portalApiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(state)
+    });
+    if(!resp.ok) throw new Error('save_state_failed');
+  }
+
+  function itemsById(arr){
+    var map = {};
+    (arr||[]).forEach(function(x){ if(x && x.id!=null) map[x.id] = x; });
+    return map;
+  }
+  // Fusión de 3 vías por colección (users/requests/licenseTypes), usando
+  // `base` (el último snapshot conocido del backend) para distinguir
+  // "esto lo borré/edité yo" de "esto lo agregó/editó otra sesión" y así no
+  // perder cambios concurrentes de otro navegador al guardar los propios.
+  function mergeCollection(baseArr, localArr, remoteArr){
+    var base = itemsById(baseArr), local = itemsById(localArr), remote = itemsById(remoteArr);
+    var resultMap = {};
+    Object.keys(local).forEach(function(id){ resultMap[id] = local[id]; });
+    Object.keys(remote).forEach(function(id){
+      if(resultMap.hasOwnProperty(id)) return;
+      if(!base.hasOwnProperty(id)){
+        // Nuevo desde otra sesión (no estaba en el snapshot base): lo conservamos.
+        resultMap[id] = remote[id];
+      }
+      // Si estaba en base pero no en local, lo borré yo intencionalmente: no se resucita.
+    });
+    Object.keys(resultMap).forEach(function(id){
+      if(local.hasOwnProperty(id) && remote.hasOwnProperty(id) && base.hasOwnProperty(id)){
+        var localTouched = JSON.stringify(local[id]) !== JSON.stringify(base[id]);
+        var remoteTouched = JSON.stringify(remote[id]) !== JSON.stringify(base[id]);
+        if(!localTouched && remoteTouched){ resultMap[id] = remote[id]; }
+        // si ambos lo tocaron, se conserva la versión local (last-writer-wins simple).
+      }
+    });
+    var order = (baseArr||[]).map(function(x){ return x.id; });
+    (localArr||[]).forEach(function(x){ if(order.indexOf(x.id)===-1) order.push(x.id); });
+    (remoteArr||[]).forEach(function(x){ if(order.indexOf(x.id)===-1) order.push(x.id); });
+    return order.filter(function(id){ return resultMap.hasOwnProperty(id); }).map(function(id){ return resultMap[id]; });
+  }
+
   async function persistState(){
     saveUiState();
     if(!artifactCap){
-      // Running outside the Claude artifact runtime (e.g. hosted standalone
-      // on Vercel/another host): fall back to this browser's localStorage.
-      // NOTE: this does NOT sync across devices/browsers — a real deployment
-      // needs a shared backend/database for that.
+      if(stateBackendAvailable){
+        try{
+          // Antes de guardar, traemos lo último del backend y fusionamos
+          // (en vez de pisarlo) para no perder cambios hechos casi al mismo
+          // tiempo desde otro navegador/dispositivo (ej. un cliente
+          // enviando una solicitud mientras el admin aprueba otra).
+          var remoteRes = await fetchRemoteState();
+          var remote = remoteRes && remoteRes.state;
+          if(remote){
+            var base = baseRemoteState || remote;
+            STATE.users = mergeCollection(base.users, STATE.users, remote.users);
+            STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
+            STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
+          }
+          await saveRemoteState(STATE);
+          baseRemoteState = JSON.parse(JSON.stringify(STATE));
+          saveLocalFallbackState();
+          render();
+        }catch(err){
+          console.error(err);
+          // Si el backend falla justo en este guardado, al menos no perdemos
+          // el cambio: queda en localStorage de este navegador.
+          saveLocalFallbackState();
+          showToast('No se pudo sincronizar con el servidor; el cambio quedó guardado solo en este navegador.', 'error');
+        }
+        return;
+      }
+      // Sin backend disponible (por ejemplo, corriendo este HTML fuera de
+      // Vercel): fallback a localStorage de este navegador. NOTE: esto NO
+      // sincroniza entre dispositivos/navegadores.
       saveLocalFallbackState();
       return;
     }
@@ -1643,9 +1738,29 @@
       }
     }catch(e){ console.warn('capability init failed', e); }
     if(!artifactCap){
-      var saved = loadLocalFallbackState();
-      if(saved) STATE = saved;
-      showToast('Modo standalone: los datos se guardan solo en este navegador. Para compartirlos entre administrador y clientes, conecta una base de datos real.', 'info');
+      // Cargamos primero desde localStorage (por si el backend tarda o no
+      // responde, no arrancamos en blanco), y lo reemplazamos si el backend
+      // (Vercel Blob) contesta con datos.
+      var savedLocal = loadLocalFallbackState();
+      if(savedLocal) STATE = savedLocal;
+      var remoteRes = await fetchRemoteState();
+      if(remoteRes){
+        stateBackendAvailable = true;
+        if(remoteRes.state){
+          STATE = remoteRes.state;
+          baseRemoteState = JSON.parse(JSON.stringify(STATE));
+          saveLocalFallbackState();
+        } else {
+          // El backend aún no tiene nada guardado (primera vez): lo
+          // inicializamos con el estado semilla/actual de este navegador.
+          try{
+            await saveRemoteState(STATE);
+            baseRemoteState = JSON.parse(JSON.stringify(STATE));
+          }catch(e){ console.error(e); }
+        }
+      } else {
+        showToast('No se pudo conectar con el servidor: los datos se guardan solo en este navegador mientras tanto.', 'info');
+      }
     }
     capReady = true;
     render();
