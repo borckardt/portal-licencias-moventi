@@ -377,6 +377,17 @@
   var selectedForIngram = new Set();
   var editingRequestId = null;
   var currentTheme = 'light';
+  var forgotPasswordOpen = false;
+  var forgotPasswordSent = false;
+  var forgotPasswordBusy = false;
+  // Si la URL trae ?resetToken=..., mostramos la pantalla de "nueva contraseña"
+  // en vez del login normal, sin importar si hay sesión activa.
+  var resetTokenFromUrl = null;
+  try{
+    var __params = new URLSearchParams(window.location.search);
+    resetTokenFromUrl = __params.get('resetToken');
+  }catch(e){}
+  var resetPasswordState = { busy: false, done: false, error: '' };
 
   function initTheme(){
     var saved = null;
@@ -580,7 +591,39 @@
   }
 
   /* ================= login ================= */
-  function tryLogin(username, password){
+  async function tryLogin(username, password){
+    if(loginRole==='admin'){
+      // La cuenta de administrador se valida contra el backend persistente
+      // (Vercel Blob) cuando está disponible, para que el restablecimiento
+      // de contraseña funcione desde cualquier navegador/dispositivo. Si ese
+      // backend no existe en este hosting (p.ej. dentro del artifact de
+      // Claude), caemos de vuelta a la validación local de siempre.
+      var verified = null;
+      try{
+        var resp = await fetch('/api/verify-admin-login', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+          body: JSON.stringify({ username: username, password: password })
+        });
+        if(resp.ok){ var data = await resp.json(); verified = !!data.ok; }
+      }catch(e){ /* sin backend en este hosting, seguimos con el fallback local */ }
+
+      if(verified===true){
+        var adminLocal = STATE.users.find(function(x){ return x.role==='admin'; }) || { id:'u-admin', username: username, role:'admin', name:'Administrador Moventi', active:true };
+        if(!adminLocal.active){ loginError = 'Esta cuenta está bloqueada. Contacta al administrador.'; render(); return; }
+        loginError = '';
+        setCurrentUser(adminLocal);
+        adminTab = 'solicitudes';
+        render();
+        return;
+      }
+      if(verified===false){
+        loginError = 'Usuario o contraseña incorrectos para el perfil seleccionado.';
+        render();
+        return;
+      }
+      // verified === null: no había backend disponible, seguimos abajo con la validación local.
+    }
     var u = STATE.users.find(function(x){ return x.username===username && x.password===password && x.role===loginRole; });
     if(!u){ loginError = 'Usuario o contraseña incorrectos para el perfil seleccionado.'; render(); return; }
     if(!u.active){ loginError = 'Esta cuenta está bloqueada. Contacta al administrador.'; render(); return; }
@@ -622,6 +665,71 @@
             '<button class="btn btn-primary" style="margin-top:.4rem;width:100%" type="submit">Ingresar</button>' +
           '</form>' +
           (loginError ? '<div class="login-error">'+esc(loginError)+'</div>' : '') +
+          (loginRole==='admin' ? renderForgotPasswordBlock() : '') +
+        '</div>' +
+      '</div>' +
+    '</div></div>';
+  }
+
+  function renderForgotPasswordBlock(){
+    if(!forgotPasswordOpen){
+      return '<p style="margin-top:.9rem;text-align:right">' +
+        '<a href="#" onclick="App.startForgotPassword(event)" style="font-size:.82rem;color:var(--ink-muted);text-decoration:underline">¿Olvidaste tu contraseña?</a>' +
+        '</p>';
+    }
+    if(forgotPasswordSent){
+      return '<div class="notice-box" style="margin-top:1rem">' + noticeIconSvg() +
+        '<span>Si el usuario existe, enviamos un enlace para restablecer la contraseña al correo registrado. Revisa la bandeja (y spam) en los próximos minutos.</span></div>' +
+        '<p style="margin-top:.6rem"><a href="#" onclick="App.cancelForgotPassword(event)" style="font-size:.82rem;color:var(--ink-muted);text-decoration:underline">Volver al inicio de sesión</a></p>';
+    }
+    return '<div class="card card-pad" style="margin-top:1rem;padding:1rem">' +
+      '<div class="card-title" style="font-size:.92rem">Restablecer contraseña</div>' +
+      '<form onsubmit="App.submitForgotPassword(event)" class="stack">' +
+        '<div class="field"><label>Usuario administrador</label><input name="username" required /></div>' +
+        '<div style="display:flex;gap:.6rem">' +
+          '<button class="btn btn-primary btn-sm" type="submit" '+(forgotPasswordBusy?'disabled':'')+'>'+(forgotPasswordBusy?'Enviando…':'Enviar enlace')+'</button>' +
+          '<button class="btn btn-ghost btn-sm" type="button" onclick="App.cancelForgotPassword(event)">Cancelar</button>' +
+        '</div>' +
+      '</form>' +
+    '</div>';
+  }
+
+  function renderResetPasswordScreen(){
+    var st = resetPasswordState;
+    var body;
+    if(st.done){
+      body = '<div class="notice-box">' + noticeIconSvg() + '<span>Tu contraseña fue actualizada. Ya puedes iniciar sesión con la nueva contraseña.</span></div>' +
+        '<button class="btn btn-primary" style="margin-top:1rem;width:100%" onclick="App.goToLoginAfterReset()">Ir a iniciar sesión</button>';
+    } else {
+      var errMsg = '';
+      if(st.error==='invalid_token') errMsg = 'El enlace no es válido. Solicita uno nuevo desde la pantalla de inicio de sesión.';
+      else if(st.error==='expired_token') errMsg = 'Este enlace expiró (vale por 30 minutos). Solicita uno nuevo.';
+      else if(st.error==='invalid_input') errMsg = 'La contraseña debe tener al menos 8 caracteres y ambas deben coincidir.';
+      else if(st.error) errMsg = 'Ocurrió un error al restablecer la contraseña. Intenta nuevamente.';
+      body = '<form onsubmit="App.submitResetPassword(event)" class="stack">' +
+        '<div class="field"><label>Nueva contraseña</label><input name="newPassword" type="password" minlength="8" required /></div>' +
+        '<div class="field"><label>Confirmar contraseña</label><input name="confirmPassword" type="password" minlength="8" required /></div>' +
+        (errMsg ? '<div class="login-error">'+esc(errMsg)+'</div>' : '') +
+        '<button class="btn btn-primary" style="margin-top:.4rem;width:100%" type="submit" '+(st.busy?'disabled':'')+'>'+(st.busy?'Guardando…':'Guardar nueva contraseña')+'</button>' +
+      '</form>';
+    }
+    return '' +
+    '<div class="login-screen"><div class="login-inner">' +
+      '<div class="login-topbar">' +
+        '<div class="logo"><span class="dot"></span>moventi</div>' +
+      '</div>' +
+      '<div class="login-hero">' +
+        '<div>' +
+          '<div class="badge"><span class="pill-dot"></span>MOVENTI</div>' +
+          '<h1>Nueva<br><span>contraseña</span></h1>' +
+          '<p class="sub">Define una nueva contraseña para la cuenta de administrador.</p>' +
+        '</div>' +
+        '<div class="orb"></div>' +
+      '</div>' +
+      '<div class="login-form-side">' +
+        '<div class="login-box">' +
+          '<h2 style="font-size:1.3rem;font-weight:800;margin-bottom:1rem">Restablecer contraseña</h2>' +
+          body +
         '</div>' +
       '</div>' +
     '</div></div>';
@@ -1055,11 +1163,15 @@
 
   /* ================= main render ================= */
   function render(){
-    var user = currentUser();
     var html;
-    if(!user) html = renderLogin();
-    else if(user.role==='admin') html = renderAdmin(user);
-    else html = renderClient(user);
+    if(resetTokenFromUrl){
+      html = renderResetPasswordScreen();
+    } else {
+      var user = currentUser();
+      if(!user) html = renderLogin();
+      else if(user.role==='admin') html = renderAdmin(user);
+      else html = renderClient(user);
+    }
     document.getElementById('root').innerHTML = html;
   }
 
@@ -1081,12 +1193,82 @@
       el.dispatchEvent(new Event('change', {bubbles:true}));
     },
     toggleTheme: function(){ currentTheme = currentTheme==='dark' ? 'light' : 'dark'; applyTheme(); render(); },
-    submitLogin: function(ev){
+    submitLogin: async function(ev){
       ev.preventDefault();
       var f = ev.target;
-      tryLogin(f.username.value.trim(), f.password.value);
+      await tryLogin(f.username.value.trim(), f.password.value);
     },
     logout: logout,
+    startForgotPassword: function(ev){
+      if(ev) ev.preventDefault();
+      forgotPasswordOpen = true;
+      forgotPasswordSent = false;
+      forgotPasswordBusy = false;
+      render();
+    },
+    cancelForgotPassword: function(ev){
+      if(ev) ev.preventDefault();
+      forgotPasswordOpen = false;
+      forgotPasswordSent = false;
+      forgotPasswordBusy = false;
+      render();
+    },
+    submitForgotPassword: async function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var username = f.username.value.trim();
+      forgotPasswordBusy = true;
+      render();
+      try{
+        await fetch('/api/request-password-reset', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+          body: JSON.stringify({ username: username })
+        });
+      }catch(e){ /* si no hay backend, no podemos hacer nada más aquí */ }
+      forgotPasswordBusy = false;
+      forgotPasswordSent = true;
+      render();
+    },
+    goToLoginAfterReset: function(){
+      try{
+        var url = new URL(window.location.href);
+        url.searchParams.delete('resetToken');
+        window.history.replaceState({}, '', url.toString());
+      }catch(e){}
+      resetTokenFromUrl = null;
+      resetPasswordState = { busy:false, done:false, error:'' };
+      render();
+    },
+    submitResetPassword: async function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var newPassword = f.newPassword.value;
+      var confirmPassword = f.confirmPassword.value;
+      if(!newPassword || newPassword.length<8 || newPassword!==confirmPassword){
+        resetPasswordState = { busy:false, done:false, error:'invalid_input' };
+        render();
+        return;
+      }
+      resetPasswordState = { busy:true, done:false, error:'' };
+      render();
+      try{
+        var resp = await fetch('/api/reset-password', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+          body: JSON.stringify({ token: resetTokenFromUrl, newPassword: newPassword })
+        });
+        var data = await resp.json().catch(function(){ return {}; });
+        if(resp.ok && data.ok){
+          resetPasswordState = { busy:false, done:true, error:'' };
+        } else {
+          resetPasswordState = { busy:false, done:false, error: data.error || 'server_error' };
+        }
+      }catch(e){
+        resetPasswordState = { busy:false, done:false, error:'server_error' };
+      }
+      render();
+    },
     setAdminTab: function(t){ adminTab = t; saveUiState(); render(); },
 
     submitRequest: function(ev){
