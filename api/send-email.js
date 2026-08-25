@@ -37,6 +37,11 @@ module.exports = async function handler(req, res) {
 
   var body = req.body || {};
   var to = (body.to || '').trim();
+  // cc puede llegar como array (['a@x.com','b@y.com']) o como string ya
+  // unida por comas; en ambos casos la normalizamos a un string "a, b" para
+  // el header Cc del correo (o vacío si no hay copias).
+  var ccArr = Array.isArray(body.cc) ? body.cc : (typeof body.cc === 'string' ? body.cc.split(',') : []);
+  var cc = ccArr.map(function (s) { return String(s || '').trim(); }).filter(function (s) { return s; }).join(', ');
   var subject = (body.subject || '').trim();
   var text = body.text || '';
   var html = body.html || '';
@@ -47,7 +52,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    var sendData = await sendGmail({ to: to, subject: subject, text: text, html: html });
+    var sendData = await sendGmail({ to: to, cc: cc, subject: subject, text: text, html: html });
     res.status(200).json({ ok: true, id: sendData.id });
   } catch (err) {
     if (err && err.message === 'missing_env') {
