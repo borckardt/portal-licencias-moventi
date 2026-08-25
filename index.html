@@ -392,6 +392,7 @@
 
   var STATE = JSON.parse(document.getElementById('app-state').textContent);
   if(!STATE.settings) STATE.settings = { ingramEmail: '' };
+  if(STATE.settings.ingramCc===undefined) STATE.settings.ingramCc = '';
   // Cuando corremos como sitio Vercel (fuera del runtime de artifacts de
   // Claude), los datos compartidos (clientes, solicitudes, tipos de
   // licencia) viven en Vercel Blob vía /api/get-state y /api/save-state, así
@@ -448,6 +449,11 @@
 
   function uid(prefix){ return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  // Convierte "a@x.com, b@y.com ,, c@z.com" en ['a@x.com','b@y.com','c@z.com'],
+  // descartando entradas vacías/inválidas (sin '@').
+  function parseEmailList(str){
+    return (str||'').split(',').map(function(s){ return s.trim(); }).filter(function(s){ return s && s.indexOf('@')>-1; });
+  }
   function money(n){ return 'US$ ' + Number(n||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
   function renderTemplate(tpl, vars){
     return String(tpl||'').replace(/\{\{(\w+)\}\}/g, function(_, key){ return (key in vars) ? String(vars[key]) : ''; });
@@ -1037,7 +1043,8 @@
     return '<div class="section-head"><h2>Solicitudes</h2><p>Valida las solicitudes de licencia enviadas por tus clientes y envía por correo las que ya están aprobadas para su gestión.</p></div>' +
     '<div class="settings-bar">' +
       '<div class="field"><label>Correo de contacto para el envío</label><input type="email" value="'+esc(STATE.settings.ingramEmail||'')+'" placeholder="contacto@proveedor.com" onchange="App.setIngramEmail(this.value)" /></div>' +
-      '<p class="hint">A este correo se enviarán las solicitudes de habilitación de licencias seleccionadas abajo.</p>' +
+      '<div class="field"><label>Copia (CC), opcional</label><input type="text" value="'+esc(STATE.settings.ingramCc||'')+'" placeholder="correo1@empresa.com, correo2@empresa.com" onchange="App.setIngramCc(this.value)" /></div>' +
+      '<p class="hint">A este correo se enviarán las solicitudes de habilitación de licencias seleccionadas abajo. Puedes agregar varios correos en copia separados por coma.</p>' +
       '<button type="button" class="btn btn-subtle btn-sm" style="flex-basis:100%;align-self:flex-start" onclick="App.toggleEmailTplEditor()">'+(emailTplOpen?'Ocultar mensaje del correo':'Personalizar mensaje del correo')+'</button>' +
       (emailTplOpen ?
         '<div class="field" style="flex-basis:100%"><label>Asunto</label><input id="email-subject-input" value="'+esc(STATE.settings.emailSubjectTemplate||'')+'" onchange="App.setEmailSubject(this.value)" /></div>' +
@@ -1539,6 +1546,10 @@
       commit(function(s){ s.settings.ingramEmail = val.trim(); });
       showToast('Correo de contacto actualizado.', 'success');
     },
+    setIngramCc: function(val){
+      commit(function(s){ s.settings.ingramCc = val.trim(); });
+      showToast('Copia (CC) actualizada.', 'success');
+    },
     toggleEmailTplEditor: function(){ emailTplOpen = !emailTplOpen; render(); },
     setEmailSubject: function(val){
       commit(function(s){ s.settings.emailSubjectTemplate = val; });
@@ -1563,6 +1574,7 @@
     sendToIngram: async function(){
       var ingramEmail = (STATE.settings.ingramEmail||'').trim();
       if(!ingramEmail){ showToast('Configura primero el correo de contacto para el envío.', 'error'); return; }
+      var ccList = parseEmailList(STATE.settings.ingramCc);
       var ids = Array.from(selectedForIngram);
       var items = STATE.requests.filter(function(r){ return ids.indexOf(r.id)>-1 && r.status==='aprobado'; });
       if(items.length===0){ showToast('Selecciona al menos una solicitud aprobada.', 'error'); return; }
@@ -1602,7 +1614,7 @@
           var apiResp = await fetch('/api/send-email', {
             method: 'POST',
             headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
-            body: JSON.stringify({ to: ingramEmail, subject: subject, text: body, html: htmlBody })
+            body: JSON.stringify({ to: ingramEmail, cc: ccList, subject: subject, text: body, html: htmlBody })
           });
           if(apiResp.ok){
             commit(function(s){
@@ -1623,7 +1635,8 @@
         }
 
         // Fallback: abrir el cliente de correo del administrador con el mensaje prefijado.
-        var mailto = 'mailto:' + encodeURIComponent(ingramEmail) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+        var mailto = 'mailto:' + encodeURIComponent(ingramEmail) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body) +
+          (ccList.length ? '&cc=' + encodeURIComponent(ccList.join(',')) : '');
         window.location.href = mailto;
         commit(function(s){
           s.requests.forEach(function(r){
@@ -1639,7 +1652,7 @@
       }
 
       try{
-        var result = await mcpCap.callTool('Gmail', 'send_message', { to: [ingramEmail], subject: subject, body: body, htmlBody: htmlBody });
+        var result = await mcpCap.callTool('Gmail', 'send_message', { to: [ingramEmail], cc: ccList, subject: subject, body: body, htmlBody: htmlBody });
         commit(function(s){
           s.requests.forEach(function(r){
             if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
