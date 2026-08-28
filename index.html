@@ -630,10 +630,46 @@
         // si ambos lo tocaron, se conserva la versión local (last-writer-wins simple).
       }
     });
+    // Lo borraron en otra sesión (estaba en base y en local, pero ya no está
+    // en remote) y yo no lo toqué: se elimina también de mi lado, para que un
+    // tipo de licencia retirado por el administrador deje de aparecer en la
+    // pestaña de un cliente que quedó abierta. Si yo sí lo edité mientras
+    // tanto, se conserva mi edición (no se resucita el borrado ajeno sobre un
+    // cambio local en curso).
+    Object.keys(resultMap).slice().forEach(function(id){
+      if(base.hasOwnProperty(id) && local.hasOwnProperty(id) && !remote.hasOwnProperty(id)){
+        var localTouched = JSON.stringify(local[id]) !== JSON.stringify(base[id]);
+        if(!localTouched){ delete resultMap[id]; }
+      }
+    });
     var order = (baseArr||[]).map(function(x){ return x.id; });
     (localArr||[]).forEach(function(x){ if(order.indexOf(x.id)===-1) order.push(x.id); });
     (remoteArr||[]).forEach(function(x){ if(order.indexOf(x.id)===-1) order.push(x.id); });
     return order.filter(function(id){ return resultMap.hasOwnProperty(id); }).map(function(id){ return resultMap[id]; });
+  }
+
+  // Sin esto, una pestaña que quedó abierta (ej. un cliente con el
+  // formulario de "Nueva solicitud" abierto) sigue mostrando los precios/tipos
+  // de licencia con los que cargó la página, aunque el administrador los
+  // haya actualizado después — no hay nada que la haga volver a preguntarle
+  // al backend. Refrescamos en segundo plano (al volver a la pestaña, al
+  // enfocar la ventana, y cada 30s mientras está visible) y fusionamos con
+  // mergeCollection para no pisar un cambio local todavía no guardado.
+  async function refreshFromRemoteIfIdle(){
+    if(!stateBackendAvailable) return;
+    try{
+      var remoteRes = await fetchRemoteState();
+      var remote = remoteRes && remoteRes.state;
+      if(!remote) return;
+      var base = baseRemoteState || remote;
+      STATE.users = mergeCollection(base.users, STATE.users, remote.users);
+      STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
+      STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
+      if(remote.settings) STATE.settings = Object.assign({}, STATE.settings, remote.settings);
+      baseRemoteState = JSON.parse(JSON.stringify(remote));
+      saveLocalFallbackState();
+      render();
+    }catch(e){ console.error(e); }
   }
 
   async function persistState(){
@@ -1868,6 +1904,15 @@
     }
     capReady = true;
     render();
+    if(stateBackendAvailable){
+      document.addEventListener('visibilitychange', function(){
+        if(document.visibilityState === 'visible') refreshFromRemoteIfIdle();
+      });
+      window.addEventListener('focus', function(){ refreshFromRemoteIfIdle(); });
+      setInterval(function(){
+        if(document.visibilityState === 'visible') refreshFromRemoteIfIdle();
+      }, 30000);
+    }
   }
   boot();
 })();
