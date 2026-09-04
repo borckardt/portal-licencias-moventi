@@ -1,51 +1,48 @@
 # Portal de licencias — Moventi
 
-Sitio estático de una sola página (`index.html`) con el portal de solicitud y aprobación de licencias de Google Workspace.
+Sitio estático desplegado en Vercel, con dos puntos de entrada separados:
 
-## Cómo abrirlo en Visual Studio Code
+- **`/` (index.html)** — acceso para clientes. Nunca muestra ni permite el login de administrador.
+- **`/admin` (admin.html)** — acceso exclusivo para el administrador (Moventi). Es una URL distinta, que no se le entrega a los clientes.
 
-1. Descomprime esta carpeta donde quieras.
-2. Abre la carpeta en VS Code (`Archivo > Abrir carpeta...`).
-3. Todo el código vive en `index.html` (HTML, CSS y JavaScript en un solo archivo, sin build ni dependencias).
-4. Para probarlo localmente, usa la extensión "Live Server" de VS Code (clic derecho sobre `index.html` → "Open with Live Server"), o corre en una terminal:
-   ```
-   npx serve .
-   ```
+Ambas páginas comparten el mismo código de la aplicación (`app.js`) y los mismos estilos (`styles.css`) — cada una solo le indica a `app.js`, mediante `window.PORTAL_ENTRY_MODE`, qué perfil de login mostrar. Esto significa que solo hay que mantener un archivo de lógica (`app.js`), no una copia por cada interfaz.
 
-## Cómo subirlo a Vercel
+## Estructura
 
-**Opción A — arrastrar y soltar (más simple):**
-1. Entra a [vercel.com](https://vercel.com) e inicia sesión.
-2. En el dashboard, "Add New… → Project", y arrastra esta carpeta (o haz zip y súbelo).
-3. Vercel detecta que es un sitio estático y lo publica en segundos. Te da una URL tipo `https://tu-proyecto.vercel.app`.
-
-**Opción B — con Git (recomendado si vas a seguir editando):**
-1. Sube esta carpeta a un repositorio en GitHub/GitLab/Bitbucket.
-2. En Vercel, "Add New… → Project" e importa ese repositorio.
-3. Cada vez que hagas `git push`, Vercel vuelve a publicar automáticamente.
-
-**Opción C — con la CLI de Vercel:**
 ```
-npm i -g vercel
-cd portal-licencias-vercel
-vercel
+portal-licencias-vercel/
+├── index.html      → entrada para clientes (/)
+├── admin.html       → entrada para el administrador (/admin)
+├── app.js           → toda la lógica de la aplicación (compartida por ambas páginas)
+├── styles.css        → todos los estilos (compartidos)
+├── robots.txt        → bloquea la indexación por buscadores (portal privado)
+├── vercel.json        → cabeceras de seguridad + config de rutas
+├── package.json
+├── api/                → endpoints serverless (backend)
+│   ├── get-state.js       GET  → lee el estado completo (clientes, solicitudes, tipos, config)
+│   ├── save-state.js      POST → guarda el estado completo
+│   ├── verify-admin-login.js  POST → valida usuario/clave del administrador
+│   ├── request-password-reset.js POST → genera token y manda correo de "olvidé mi contraseña" (enlace a /admin)
+│   ├── reset-password.js  POST → aplica la nueva contraseña con el token
+│   └── send-email.js      POST → envía el correo al proveedor (con CC) vía Gmail API
+└── lib/                 → lógica compartida entre endpoints (Vercel Blob, Gmail)
 ```
-Sigue las instrucciones (inicia sesión, confirma el proyecto) y te da la URL de producción.
 
-## Muy importante: qué funciona y qué no, hosteado así
+## Cómo editarlo
 
-Esta página se construyó originalmente para correr dentro de Claude (Anthropic), donde tenía acceso a capacidades especiales para guardar datos compartidos entre usuarios, enviar correos por Gmail y generar descargas. Fuera de Claude (por ejemplo en Vercel, como sitio estático puro) **esas capacidades no existen**, así que se agregaron alternativas automáticas (fallbacks), pero con limitaciones reales que debes conocer antes de dárselo a tus clientes:
+- Cambios de lógica/pantallas (ambos perfiles): edita `app.js`.
+- Cambios de estilos: edita `styles.css`.
+- Cambios que solo apliquen a una de las dos entradas (p. ej. el texto del encabezado): busca `ENTRY_MODE` dentro de `app.js` — ahí se ramifica lo que es distinto entre cliente y administrador.
+- No dupliques `app.js` ni `styles.css` entre `index.html` y `admin.html`: ambas páginas cargan los mismos archivos.
 
-- **Guardado de datos**: sin backend, la app guarda las solicitudes en el `localStorage` del navegador — es decir, **cada navegador/dispositivo tiene su propia copia de los datos, que no se comparte** entre tú (administrador) y tus clientes. Un cliente que registre una solicitud en su computadora NO la verás tú en la tuya. Esto es solo apto para pruebas o demos, no para operar con clientes reales.
-- **Envío de correo**: sin la integración de Gmail de Claude, el botón "Enviar solicitud por correo" abre el cliente de correo predeterminado del administrador (`mailto:`) con el asunto y mensaje ya armados, para que él mismo presione enviar. Funciona, pero es manual (no se envía automáticamente) y depende de que el navegador tenga un cliente de correo configurado.
-- **Descarga de CSV**: funciona igual que antes, sin cambios — usa la descarga nativa del navegador.
-- **Contraseñas**: los usuarios y contraseñas (incluida la del administrador) están en texto plano dentro del propio HTML, visibles para cualquiera que abra el "código fuente" de la página. Esto es aceptable para una demo privada, pero **no es seguro para producción real** con datos de clientes.
+## Seguridad
 
-### Para que esto funcione de verdad con clientes reales
+- **Dos puertas separadas**: la interfaz de administrador nunca aparece ni es alcanzable desde la página de clientes (ni siquiera el selector de "Cliente/Administrador" existe ya) — son URLs (`/` y `/admin`) y archivos distintos.
+- **Cabeceras HTTP** (`vercel.json`): `X-Robots-Tag: noindex` (no indexable por buscadores/bots), `Content-Security-Policy`, `X-Frame-Options: DENY` (anti-clickjacking), `Strict-Transport-Security`, `Referrer-Policy`, `Permissions-Policy`.
+- **`robots.txt`**: bloquea el rastreo de todo el sitio por bots de buscadores.
+- **`PORTAL_API_TOKEN`**: token compartido que el frontend manda en cada llamada a `/api/*`, para que esos endpoints no sean un relay abierto para bots/scripts automatizados (ver `SETUP_GMAIL.md`).
+- **Datos**: el estado de la app (clientes, solicitudes, tipos de licencia) vive en Vercel Blob (`app-state.json`), no en el HTML ni en `localStorage` — todos los navegadores/dispositivos ven los mismos datos. La contraseña del administrador vive hasheada (salt + SHA-256) en un blob separado (`admin-auth-*.json`); las contraseñas de clientes están en texto plano dentro de ese mismo estado (aceptable para este uso interno de bajo riesgo, no para datos sensibles).
 
-Necesitas un backend real:
-1. Una base de datos (Vercel Postgres, Supabase, Neon, etc.) donde se guarden usuarios, tipos de licencia y solicitudes, y una API (funciones serverless de Vercel) para leer/escribir ahí — así todos los usuarios ven los mismos datos.
-2. Autenticación real: contraseñas hasheadas (nunca en texto plano) y sesiones o tokens en vez de guardar todo en el HTML.
-3. Un servicio de envío de correo (Resend, SendGrid, o SMTP) llamado desde una función serverless, para que el envío sea automático y no dependa del cliente de correo del administrador.
+## Desplegar cambios
 
-Si quieres, dile a Claude que continúe con este rebuild — solo necesita que le confirmes qué base de datos y qué servicio de correo prefieres usar, y las credenciales/API keys correspondientes (esas nunca deben quedar visibles en el código del navegador; se configuran como variables de entorno en Vercel).
+Este proyecto se sube a GitHub (`borckardt/portal-licencias-moventi`, privado) y Vercel lo redespliega automáticamente en cada push a `main`. Ver `SETUP_GMAIL.md` para la configuración del envío automático de correo por Gmail.

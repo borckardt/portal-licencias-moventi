@@ -1,0 +1,1549 @@
+(function(){
+  "use strict";
+
+  /* ================= state & capabilities ================= */
+  // Token compartido opcional para el endpoint /api/send-email (ver SETUP_GMAIL.md).
+  // No es un secreto fuerte: vive en el HTML de esta página. Déjalo vacío si no usas ese backend.
+  var PORTAL_API_TOKEN = 'FEn_CYyxfOZn8Q1BTXsDMxxJI-1fi9B5';
+  // Este mismo app.js lo cargan dos páginas separadas (index.html para
+  // clientes, admin.html para el administrador — ver ambos archivos). Cada
+  // una define window.PORTAL_ENTRY_MODE antes de este script para fijar qué
+  // perfil de login se muestra; ya no hay un selector de "Cliente/Admin" en
+  // pantalla, así que un cliente jamás ve ni puede intentar la puerta de
+  // administrador, y viceversa.
+  var ENTRY_MODE = (typeof window !== 'undefined' && window.PORTAL_ENTRY_MODE === 'admin') ? 'admin' : 'client';
+  // A dónde llega el aviso automático de "nueva solicitud creada por un cliente".
+  var NEW_REQUEST_NOTIFY_EMAILS = ['sborckardt@moventiglobal.com', 'administracion@moventiglobal.com'];
+  var DEFAULT_EMAIL_SUBJECT = 'Solicitud de habilitación de licencias — Moventi ({{cantidad}} {{unidad}})';
+  var DEFAULT_EMAIL_BODY = 'Hola,\n\nSe solicita generar/habilitar las siguientes licencias aprobadas:\n\n{{detalle}}\n\nSaludos,\n{{admin}}';
+
+  var STATE = JSON.parse(document.getElementById('app-state').textContent);
+  if(!STATE.settings) STATE.settings = { ingramEmail: '' };
+  if(STATE.settings.ingramCc===undefined) STATE.settings.ingramCc = '';
+  // Cuando corremos como sitio Vercel (fuera del runtime de artifacts de
+  // Claude), los datos compartidos (clientes, solicitudes, tipos de
+  // licencia) viven en Vercel Blob vía /api/get-state y /api/save-state, así
+  // que cualquier navegador/dispositivo ve el mismo dato. baseRemoteState
+  // guarda el último snapshot conocido del backend, usado para fusionar
+  // cambios concurrentes en vez de pisarlos (ver mergeCollection).
+  var stateBackendAvailable = false;
+  var baseRemoteState = null;
+  if(!STATE.settings.emailSubjectTemplate) STATE.settings.emailSubjectTemplate = DEFAULT_EMAIL_SUBJECT;
+  if(!STATE.settings.emailBodyTemplate) STATE.settings.emailBodyTemplate = DEFAULT_EMAIL_BODY;
+  var emailTplOpen = false;
+  var artifactCap = null, downloadsCap = null, mcpCap = null, capReady = false;
+  var loginRole = ENTRY_MODE;
+  var loginError = '';
+  var adminTab = 'solicitudes';
+  var reportFilter = { from: null, to: null, cliente: 'todos', estado: 'todos', tipo: 'todos', quick: 'mes' };
+  var reportPicker = { open: false, step: 'from', cursor: null };
+  var solFilter = { cliente: 'todos', estado: 'todos' };
+  var selectedForIngram = new Set();
+  var editingRequestId = null;
+  var editingClientId = null;
+  var openRowMenu = null;
+  var rowMenuPos = null;
+  var visibleClientPasswords = {};
+  var currentTheme = 'light';
+  var forgotPasswordOpen = false;
+  var forgotPasswordSent = false;
+  var forgotPasswordBusy = false;
+  // Si la URL trae ?resetToken=..., mostramos la pantalla de "nueva contraseña"
+  // en vez del login normal, sin importar si hay sesión activa.
+  var resetTokenFromUrl = null;
+  try{
+    var __params = new URLSearchParams(window.location.search);
+    resetTokenFromUrl = __params.get('resetToken');
+  }catch(e){}
+  var resetPasswordState = { busy: false, done: false, error: '' };
+
+  function initTheme(){
+    var saved = null;
+    try{ saved = localStorage.getItem('moventi_theme'); }catch(e){}
+    currentTheme = (saved==='dark' || saved==='light') ? saved : 'light';
+    applyTheme();
+  }
+  function applyTheme(){
+    document.body.classList.toggle('theme-dark', currentTheme==='dark');
+    try{ localStorage.setItem('moventi_theme', currentTheme); }catch(e){}
+  }
+  function themeIcon(){
+    if(currentTheme==='dark'){
+      return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="4.2" y1="4.2" x2="6.3" y2="6.3"></line><line x1="17.7" y1="17.7" x2="19.8" y2="19.8"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line><line x1="4.2" y1="19.8" x2="6.3" y2="17.7"></line><line x1="17.7" y1="6.3" x2="19.8" y2="4.2"></line></svg>';
+    }
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"></path></svg>';
+  }
+
+  function uid(prefix){ return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  // Convierte "a@x.com, b@y.com ,, c@z.com" en ['a@x.com','b@y.com','c@z.com'],
+  // descartando entradas vacías/inválidas (sin '@').
+  function parseEmailList(str){
+    return (str||'').split(',').map(function(s){ return s.trim(); }).filter(function(s){ return s && s.indexOf('@')>-1; });
+  }
+  function money(n){ return 'US$ ' + Number(n||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+  function renderTemplate(tpl, vars){
+    return String(tpl||'').replace(/\{\{(\w+)\}\}/g, function(_, key){ return (key in vars) ? String(vars[key]) : ''; });
+  }
+  // Renders a template to HTML: plain text segments are escaped and newlines
+  // become <br>, but any placeholder listed in htmlOverrides is inserted as
+  // raw HTML (e.g. so {{detalle}} can become a real <table>).
+  function renderTemplateHtml(tpl, vars, htmlOverrides){
+    var re = /\{\{(\w+)\}\}/g;
+    var out = '', lastIndex = 0, m;
+    var src = String(tpl||'');
+    while((m = re.exec(src))){
+      if(m.index > lastIndex) out += esc(src.slice(lastIndex, m.index)).replace(/\n/g, '<br>');
+      var key = m[1];
+      if(htmlOverrides && Object.prototype.hasOwnProperty.call(htmlOverrides, key)) out += htmlOverrides[key];
+      else out += esc((vars && key in vars) ? String(vars[key]) : '');
+      lastIndex = re.lastIndex;
+    }
+    if(lastIndex < src.length) out += esc(src.slice(lastIndex)).replace(/\n/g, '<br>');
+    return out;
+  }
+  // Envío de correo "mejor esfuerzo": intenta el backend /api/send-email
+  // (Vercel), luego el conector de Gmail de Claude si está disponible, y si
+  // ninguno existe simplemente no hace nada — nunca interrumpe al usuario ni
+  // abre un cliente de correo por su cuenta, porque esto corre automático
+  // (no a partir de un clic explícito de "enviar").
+  async function sendEmailBestEffort(toList, subject, text, html){
+    var to = toList.join(', ');
+    try{
+      var apiResp = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+        body: JSON.stringify({ to: to, subject: subject, text: text, html: html })
+      });
+      if(apiResp.ok) return true;
+    }catch(e){ /* backend no disponible en este hosting, seguimos abajo */ }
+    if(mcpCap){
+      try{
+        await mcpCap.callTool('Gmail', 'send_message', { to: toList, subject: subject, body: text, htmlBody: html });
+        return true;
+      }catch(e){ /* sin Gmail conectado en este contexto; fallamos en silencio */ }
+    }
+    return false;
+  }
+
+  function notifyNewRequest(r){
+    var subject = 'Nueva solicitud de licencia — ' + r.clientName + ' (' + (r.quantity||1) + ' ' + ((r.quantity||1)===1?'licencia':'licencias') + ')';
+    var text = 'Se registró una nueva solicitud de licencia:\n\n' +
+      '- Cliente: ' + r.clientName + '\n' +
+      '- Tipo: ' + r.licenseTypeName + '\n' +
+      '- Cantidad: ' + (r.quantity||1) + '\n' +
+      '- Necesaria desde: ' + fmtDateShort(r.neededFrom) + '\n' +
+      (r.note ? ('- Nota del cliente: ' + r.note + '\n') : '') +
+      '\nIngresa al portal para revisarla y aprobarla.';
+    var html = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
+      '<p>Se registró una nueva solicitud de licencia:</p>' +
+      '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
+      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Necesaria desde</th></tr>' +
+      '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center">'+(r.quantity||1)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+fmtDateShort(r.neededFrom)+'</td></tr>' +
+      '</table>' +
+      (r.note ? ('<p><strong>Nota del cliente:</strong> '+esc(r.note)+'</p>') : '') +
+      '<p>Ingresa al portal para revisarla y aprobarla.</p>' +
+      '</div>';
+    sendEmailBestEffort(NEW_REQUEST_NOTIFY_EMAILS, subject, text, html);
+  }
+
+  function reqTotal(r){ return Number(r.price||0) * Number(r.quantity||1); }
+  function fmtDate(iso){ if(!iso) return '—'; var d = new Date(iso); return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'}); }
+  function fmtDateShort(ymd){ if(!ymd) return '—'; var p = ymd.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
+  function todayYmd(){ var d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function dateOnly(iso){ if(!iso) return null; return iso.slice(0,10); }
+
+  function currentUser(){
+    var id = sessionStorage.getItem('moventi_uid');
+    if(!id) return null;
+    var u = STATE.users.find(function(x){ return x.id===id; });
+    // La sesión guardada solo cuenta en la página a la que pertenece: si por
+    // cualquier motivo quedó un id de admin en sessionStorage y esta pestaña
+    // navega a la página de cliente (o viceversa), no debe auto-loguear al
+    // usuario equivocado en la interfaz equivocada.
+    if(!u || !u.active || u.role !== ENTRY_MODE) return null;
+    return u;
+  }
+  function setCurrentUser(u){ sessionStorage.setItem('moventi_uid', u ? u.id : ''); }
+  function logout(){ sessionStorage.removeItem('moventi_uid'); render(); }
+
+  /* ================= persistence ================= */
+  function showToast(msg, kind){
+    var stack = document.getElementById('toast-stack');
+    var el = document.createElement('div');
+    el.className = 'toast toast-' + (kind||'info');
+    el.textContent = msg;
+    stack.appendChild(el);
+    setTimeout(function(){ el.remove(); }, 3600);
+  }
+
+  function saveUiState(){
+    try{
+      sessionStorage.setItem('moventi_ui', JSON.stringify({ adminTab: adminTab, solFilter: solFilter, reportFilter: reportFilter }));
+    }catch(e){}
+  }
+  function restoreUiState(){
+    try{
+      var raw = sessionStorage.getItem('moventi_ui');
+      if(!raw) return;
+      var saved = JSON.parse(raw);
+      if(saved.adminTab) adminTab = saved.adminTab;
+      if(saved.solFilter) solFilter = saved.solFilter;
+      if(saved.reportFilter) reportFilter = saved.reportFilter;
+    }catch(e){}
+  }
+
+  function loadLocalFallbackState(){
+    try{
+      var raw = localStorage.getItem('moventi_portal_state_v1');
+      if(raw) return JSON.parse(raw);
+    }catch(e){}
+    return null;
+  }
+  function saveLocalFallbackState(){
+    try{ localStorage.setItem('moventi_portal_state_v1', JSON.stringify(STATE)); }catch(e){}
+  }
+
+  function portalApiHeaders(extra){
+    return Object.assign({}, extra||{}, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {});
+  }
+
+  // Trae el estado compartido guardado en el backend (Vercel Blob).
+  // Devuelve { state } si hay backend disponible (state puede ser null si
+  // aún no se ha guardado nada), o null si el backend no responde (por
+  // ejemplo, corriendo este HTML fuera de Vercel, sin las funciones /api/*).
+  async function fetchRemoteState(){
+    try{
+      var resp = await fetch('/api/get-state', { headers: portalApiHeaders(), cache: 'no-store' });
+      if(!resp.ok) return null;
+      var data = await resp.json();
+      if(!data || !data.ok) return null;
+      return { state: data.state || null };
+    }catch(e){ return null; }
+  }
+  async function saveRemoteState(state){
+    var resp = await fetch('/api/save-state', {
+      method: 'POST',
+      headers: portalApiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(state)
+    });
+    if(!resp.ok) throw new Error('save_state_failed');
+  }
+
+  function itemsById(arr){
+    var map = {};
+    (arr||[]).forEach(function(x){ if(x && x.id!=null) map[x.id] = x; });
+    return map;
+  }
+  // Fusión de 3 vías por colección (users/requests/licenseTypes), usando
+  // `base` (el último snapshot conocido del backend) para distinguir
+  // "esto lo borré/edité yo" de "esto lo agregó/editó otra sesión" y así no
+  // perder cambios concurrentes de otro navegador al guardar los propios.
+  function mergeCollection(baseArr, localArr, remoteArr){
+    var base = itemsById(baseArr), local = itemsById(localArr), remote = itemsById(remoteArr);
+    var resultMap = {};
+    Object.keys(local).forEach(function(id){ resultMap[id] = local[id]; });
+    Object.keys(remote).forEach(function(id){
+      if(resultMap.hasOwnProperty(id)) return;
+      if(!base.hasOwnProperty(id)){
+        // Nuevo desde otra sesión (no estaba en el snapshot base): lo conservamos.
+        resultMap[id] = remote[id];
+      }
+      // Si estaba en base pero no en local, lo borré yo intencionalmente: no se resucita.
+    });
+    Object.keys(resultMap).forEach(function(id){
+      if(local.hasOwnProperty(id) && remote.hasOwnProperty(id) && base.hasOwnProperty(id)){
+        var localTouched = JSON.stringify(local[id]) !== JSON.stringify(base[id]);
+        var remoteTouched = JSON.stringify(remote[id]) !== JSON.stringify(base[id]);
+        if(!localTouched && remoteTouched){ resultMap[id] = remote[id]; }
+        // si ambos lo tocaron, se conserva la versión local (last-writer-wins simple).
+      }
+    });
+    // Lo borraron en otra sesión (estaba en base y en local, pero ya no está
+    // en remote) y yo no lo toqué: se elimina también de mi lado, para que un
+    // tipo de licencia retirado por el administrador deje de aparecer en la
+    // pestaña de un cliente que quedó abierta. Si yo sí lo edité mientras
+    // tanto, se conserva mi edición (no se resucita el borrado ajeno sobre un
+    // cambio local en curso).
+    Object.keys(resultMap).slice().forEach(function(id){
+      if(base.hasOwnProperty(id) && local.hasOwnProperty(id) && !remote.hasOwnProperty(id)){
+        var localTouched = JSON.stringify(local[id]) !== JSON.stringify(base[id]);
+        if(!localTouched){ delete resultMap[id]; }
+      }
+    });
+    var order = (baseArr||[]).map(function(x){ return x.id; });
+    (localArr||[]).forEach(function(x){ if(order.indexOf(x.id)===-1) order.push(x.id); });
+    (remoteArr||[]).forEach(function(x){ if(order.indexOf(x.id)===-1) order.push(x.id); });
+    return order.filter(function(id){ return resultMap.hasOwnProperty(id); }).map(function(id){ return resultMap[id]; });
+  }
+
+  // Sin esto, una pestaña que quedó abierta (ej. un cliente con el
+  // formulario de "Nueva solicitud" abierto) sigue mostrando los precios/tipos
+  // de licencia con los que cargó la página, aunque el administrador los
+  // haya actualizado después — no hay nada que la haga volver a preguntarle
+  // al backend. Refrescamos en segundo plano (al volver a la pestaña, al
+  // enfocar la ventana, y cada 30s mientras está visible) y fusionamos con
+  // mergeCollection para no pisar un cambio local todavía no guardado.
+  async function refreshFromRemoteIfIdle(){
+    if(!stateBackendAvailable) return;
+    try{
+      var remoteRes = await fetchRemoteState();
+      var remote = remoteRes && remoteRes.state;
+      if(!remote) return;
+      var base = baseRemoteState || remote;
+      STATE.users = mergeCollection(base.users, STATE.users, remote.users);
+      STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
+      STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
+      if(remote.settings) STATE.settings = Object.assign({}, STATE.settings, remote.settings);
+      baseRemoteState = JSON.parse(JSON.stringify(remote));
+      saveLocalFallbackState();
+      render();
+    }catch(e){ console.error(e); }
+  }
+
+  async function persistState(){
+    saveUiState();
+    if(!artifactCap){
+      if(stateBackendAvailable){
+        try{
+          // Antes de guardar, traemos lo último del backend y fusionamos
+          // (en vez de pisarlo) para no perder cambios hechos casi al mismo
+          // tiempo desde otro navegador/dispositivo (ej. un cliente
+          // enviando una solicitud mientras el admin aprueba otra).
+          var remoteRes = await fetchRemoteState();
+          var remote = remoteRes && remoteRes.state;
+          if(remote){
+            var base = baseRemoteState || remote;
+            STATE.users = mergeCollection(base.users, STATE.users, remote.users);
+            STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
+            STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
+          }
+          await saveRemoteState(STATE);
+          baseRemoteState = JSON.parse(JSON.stringify(STATE));
+          saveLocalFallbackState();
+          render();
+        }catch(err){
+          console.error(err);
+          // Si el backend falla justo en este guardado, al menos no perdemos
+          // el cambio: queda en localStorage de este navegador.
+          saveLocalFallbackState();
+          showToast('No se pudo sincronizar con el servidor; el cambio quedó guardado solo en este navegador.', 'error');
+        }
+        return;
+      }
+      // Sin backend disponible (por ejemplo, corriendo este HTML fuera de
+      // Vercel): fallback a localStorage de este navegador. NOTE: esto NO
+      // sincroniza entre dispositivos/navegadores.
+      saveLocalFallbackState();
+      return;
+    }
+    try{
+      var res = await fetch(location.href, {cache:'no-store'});
+      var raw = await res.text();
+      var marker = /<script id="app-state" type="application\/json">[\s\S]*?<\/script>/;
+      if(!marker.test(raw)){ console.warn('state marker not found'); return; }
+      var payload = JSON.stringify(STATE).replace(/</g, '\\u003c');
+      var newHtml = raw.replace(marker, '<script id="app-state" type="application/json">' + payload + '</' + 'script>');
+      await artifactCap.publish(newHtml);
+    }catch(err){
+      if(err && err.code === 'conflict') return;
+      if(err && (err.code === 'not_writer' || err.code === 'not_granted')){
+        showToast('No tienes permiso de edición sobre esta página. Pide acceso de editor al dueño del enlace.', 'error');
+        return;
+      }
+      console.error(err);
+      showToast('No se pudo guardar el cambio. Intenta de nuevo.', 'error');
+    }
+  }
+
+  function commit(mutator){
+    mutator(STATE);
+    render();
+    persistState();
+  }
+
+  async function downloadCsv(filename, csvText){
+    if(!downloadsCap){
+      // Outside the Claude artifact runtime (e.g. hosted standalone) fall back
+      // to a plain browser download via a Blob + temporary link.
+      try{
+        var blob = new Blob(['﻿' + csvText], {type:'text/csv;charset=utf-8'});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+        showToast('Descarga iniciada.', 'success');
+      }catch(e){
+        showToast('No se pudo generar la descarga.', 'error');
+      }
+      return;
+    }
+    try{
+      await downloadsCap.save({ filename: filename, data: '﻿' + csvText });
+      showToast('Descarga iniciada.', 'success');
+    }catch(err){
+      if(err && err.code === 'declined') return;
+      showToast('No se pudo generar la descarga.', 'error');
+    }
+  }
+
+  /* ================= login ================= */
+  async function tryLogin(username, password){
+    if(loginRole==='admin'){
+      // La cuenta de administrador se valida contra el backend persistente
+      // (Vercel Blob) cuando está disponible, para que el restablecimiento
+      // de contraseña funcione desde cualquier navegador/dispositivo. Si ese
+      // backend no existe en este hosting (p.ej. dentro del artifact de
+      // Claude), caemos de vuelta a la validación local de siempre.
+      var verified = null;
+      try{
+        var resp = await fetch('/api/verify-admin-login', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+          body: JSON.stringify({ username: username, password: password })
+        });
+        if(resp.ok){ var data = await resp.json(); verified = !!data.ok; }
+      }catch(e){ /* sin backend en este hosting, seguimos con el fallback local */ }
+
+      if(verified===true){
+        var adminLocal = STATE.users.find(function(x){ return x.role==='admin'; }) || { id:'u-admin', username: username, role:'admin', name:'Administrador Moventi', active:true };
+        if(!adminLocal.active){ loginError = 'Esta cuenta está bloqueada. Contacta al administrador.'; render(); return; }
+        loginError = '';
+        setCurrentUser(adminLocal);
+        adminTab = 'solicitudes';
+        render();
+        return;
+      }
+      if(verified===false){
+        loginError = 'Usuario o contraseña incorrectos para el perfil seleccionado.';
+        render();
+        return;
+      }
+      // verified === null: no había backend disponible, seguimos abajo con la validación local.
+    }
+    var u = STATE.users.find(function(x){ return x.username===username && x.password===password && x.role===loginRole; });
+    if(!u){ loginError = 'Usuario o contraseña incorrectos para el perfil seleccionado.'; render(); return; }
+    if(!u.active){ loginError = 'Esta cuenta está bloqueada. Contacta al administrador.'; render(); return; }
+    loginError = '';
+    setCurrentUser(u);
+    adminTab = 'solicitudes';
+    render();
+  }
+
+  function renderLogin(){
+    return '' +
+    '<div class="login-screen"><div class="login-inner">' +
+      '<div class="login-topbar">' +
+        '<div class="logo"><span class="dot"></span>moventi</div>' +
+        '<div style="display:flex;align-items:center;gap:1rem">' +
+          '<span style="color:var(--ink-muted);font-size:.85rem;font-weight:600">Módulo de licencias</span>' +
+          '<button type="button" class="theme-toggle" onclick="App.toggleTheme()">'+themeIcon()+'<span>'+(currentTheme==='dark'?'Modo claro':'Modo oscuro')+'</span></button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="login-hero">' +
+        '<div>' +
+          '<div class="badge"><span class="pill-dot"></span>MOVENTI' + (ENTRY_MODE==='admin' ? ' · ADMIN' : '') + '</div>' +
+          (ENTRY_MODE==='admin'
+            ? '<h1>Panel de<br><span>administración</span></h1>' +
+              '<p class="sub">Aprueba solicitudes, administra clientes y tipos de licencia, y da seguimiento al reporte.</p>'
+            : '<h1>Portal de<br><span>licencias</span></h1>' +
+              '<p class="sub">Solicita, valida y da seguimiento a las licencias de Google Workspace de tu equipo desde un solo lugar.</p>') +
+        '</div>' +
+        '<div class="orb"></div>' +
+      '</div>' +
+      '<div class="login-form-side">' +
+        '<div class="login-box">' +
+          '<h2 style="font-size:1.3rem;font-weight:800;margin-bottom:.3rem">Inicia sesión</h2>' +
+          '<p style="color:var(--ink-muted);font-size:.88rem;margin-bottom:1.4rem">' + (ENTRY_MODE==='admin' ? 'Acceso exclusivo para el equipo de Moventi.' : 'Ingresa con las credenciales de tu empresa.') + '</p>' +
+          '<form onsubmit="App.submitLogin(event)" class="stack">' +
+            '<div class="field"><label>Usuario</label><input name="username" autocomplete="username" required /></div>' +
+            '<div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="current-password" required /></div>' +
+            '<button class="btn btn-primary" style="margin-top:.4rem;width:100%" type="submit">Ingresar</button>' +
+          '</form>' +
+          (loginError ? '<div class="login-error">'+esc(loginError)+'</div>' : '') +
+          (loginRole==='admin' ? renderForgotPasswordBlock() : '') +
+        '</div>' +
+      '</div>' +
+    '</div></div>';
+  }
+
+  function renderForgotPasswordBlock(){
+    if(!forgotPasswordOpen){
+      return '<p style="margin-top:.9rem;text-align:right">' +
+        '<a href="#" onclick="App.startForgotPassword(event)" style="font-size:.82rem;color:var(--ink-muted);text-decoration:underline">¿Olvidaste tu contraseña?</a>' +
+        '</p>';
+    }
+    if(forgotPasswordSent){
+      return '<div class="notice-box" style="margin-top:1rem">' + noticeIconSvg() +
+        '<span>Si el usuario existe, enviamos un enlace para restablecer la contraseña al correo registrado. Revisa la bandeja (y spam) en los próximos minutos.</span></div>' +
+        '<p style="margin-top:.6rem"><a href="#" onclick="App.cancelForgotPassword(event)" style="font-size:.82rem;color:var(--ink-muted);text-decoration:underline">Volver al inicio de sesión</a></p>';
+    }
+    return '<div class="card card-pad" style="margin-top:1rem;padding:1rem">' +
+      '<div class="card-title" style="font-size:.92rem">Restablecer contraseña</div>' +
+      '<form onsubmit="App.submitForgotPassword(event)" class="stack">' +
+        '<div class="field"><label>Usuario administrador</label><input name="username" required /></div>' +
+        '<div style="display:flex;gap:.6rem">' +
+          '<button class="btn btn-primary btn-sm" type="submit" '+(forgotPasswordBusy?'disabled':'')+'>'+(forgotPasswordBusy?'Enviando…':'Enviar enlace')+'</button>' +
+          '<button class="btn btn-ghost btn-sm" type="button" onclick="App.cancelForgotPassword(event)">Cancelar</button>' +
+        '</div>' +
+      '</form>' +
+    '</div>';
+  }
+
+  function renderResetPasswordScreen(){
+    var st = resetPasswordState;
+    var body;
+    if(st.done){
+      body = '<div class="notice-box">' + noticeIconSvg() + '<span>Tu contraseña fue actualizada. Ya puedes iniciar sesión con la nueva contraseña.</span></div>' +
+        '<button class="btn btn-primary" style="margin-top:1rem;width:100%" onclick="App.goToLoginAfterReset()">Ir a iniciar sesión</button>';
+    } else {
+      var errMsg = '';
+      if(st.error==='invalid_token') errMsg = 'El enlace no es válido. Solicita uno nuevo desde la pantalla de inicio de sesión.';
+      else if(st.error==='expired_token') errMsg = 'Este enlace expiró (vale por 30 minutos). Solicita uno nuevo.';
+      else if(st.error==='invalid_input') errMsg = 'La contraseña debe tener al menos 8 caracteres y ambas deben coincidir.';
+      else if(st.error) errMsg = 'Ocurrió un error al restablecer la contraseña. Intenta nuevamente.';
+      body = '<form onsubmit="App.submitResetPassword(event)" class="stack">' +
+        '<div class="field"><label>Nueva contraseña</label><input name="newPassword" type="password" minlength="8" required /></div>' +
+        '<div class="field"><label>Confirmar contraseña</label><input name="confirmPassword" type="password" minlength="8" required /></div>' +
+        (errMsg ? '<div class="login-error">'+esc(errMsg)+'</div>' : '') +
+        '<button class="btn btn-primary" style="margin-top:.4rem;width:100%" type="submit" '+(st.busy?'disabled':'')+'>'+(st.busy?'Guardando…':'Guardar nueva contraseña')+'</button>' +
+      '</form>';
+    }
+    return '' +
+    '<div class="login-screen"><div class="login-inner">' +
+      '<div class="login-topbar">' +
+        '<div class="logo"><span class="dot"></span>moventi</div>' +
+      '</div>' +
+      '<div class="login-hero">' +
+        '<div>' +
+          '<div class="badge"><span class="pill-dot"></span>MOVENTI</div>' +
+          '<h1>Nueva<br><span>contraseña</span></h1>' +
+          '<p class="sub">Define una nueva contraseña para la cuenta de administrador.</p>' +
+        '</div>' +
+        '<div class="orb"></div>' +
+      '</div>' +
+      '<div class="login-form-side">' +
+        '<div class="login-box">' +
+          '<h2 style="font-size:1.3rem;font-weight:800;margin-bottom:1rem">Restablecer contraseña</h2>' +
+          body +
+        '</div>' +
+      '</div>' +
+    '</div></div>';
+  }
+
+  /* ================= shell ================= */
+  function topbar(user, roleLabel){
+    return '<div class="topbar">' +
+      '<div class="logo"><span class="dot"></span>moventi<span style="font-weight:500;color:var(--ink-muted);font-size:.85rem;margin-left:.6rem">Portal de licencias</span></div>' +
+      '<div class="topbar-right">' +
+        '<button type="button" class="theme-toggle" onclick="App.toggleTheme()">'+themeIcon()+'<span>'+(currentTheme==='dark'?'Modo claro':'Modo oscuro')+'</span></button>' +
+        '<span class="role-chip">'+esc(roleLabel)+'</span>' +
+        '<span class="user-name">'+esc(user.name)+'</span>' +
+        '<button class="btn btn-ghost btn-sm" onclick="App.logout()">Cerrar sesión</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  /* ================= client view ================= */
+  function renderClient(user){
+    var myReqs = STATE.requests.filter(function(r){ return r.clientUsername===user.username; })
+      .sort(function(a,b){ return new Date(b.requestedAt)-new Date(a.requestedAt); });
+    var activeTypes = STATE.licenseTypes.filter(function(t){ return t.active; });
+
+    var rows = myReqs.map(function(r){
+      return '<tr>' +
+        '<td>'+esc(r.licenseTypeName)+'</td>' +
+        '<td class="num">'+(r.quantity||1)+'</td>' +
+        '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
+        '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
+        '<td class="num">'+money(reqTotal(r))+'</td>' +
+        '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+        '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
+        '<td style="color:var(--ink-muted)">'+esc(r.note||'—')+'</td>' +
+      '</tr>';
+    }).join('');
+
+    var options = activeTypes.map(function(t){
+      return '<option value="'+t.id+'">'+esc(t.name)+' — '+money(t.price)+'</option>';
+    }).join('');
+
+    return topbar(user, 'Cliente') +
+    '<div class="app-body">' +
+      '<div class="main-area" style="max-width:1000px">' +
+        '<div class="section-head"><h2>Hola, '+esc(user.name)+'</h2><p>Registra nuevas solicitudes de licencia y revisa el estado de las anteriores.</p></div>' +
+        '<div class="stack">' +
+          '<div class="card card-pad">' +
+            '<div class="card-title">Nueva solicitud de licencia</div>' +
+            (activeTypes.length===0
+              ? '<p class="empty-note">No hay tipos de licencia disponibles actualmente. Contacta al administrador.</p>'
+              : '<form onsubmit="App.submitRequest(event)" class="stack">' +
+                '<div class="field-row">' +
+                  '<div class="field"><label>Tipo de licencia</label><select name="licenseTypeId" required>'+options+'</select></div>' +
+                  '<div class="field"><label>Cantidad de licencias</label><div class="num-field"><input type="number" id="new-qty-input" name="quantity" min="1" step="1" value="1" required />'+numStepper('new-qty-input',1)+'</div></div>' +
+                '</div>' +
+                '<div class="field-row">' +
+                  '<div class="field"><label>¿Desde cuándo se necesita habilitada?</label><input type="date" name="neededFrom" min="'+todayYmd()+'" required /></div>' +
+                '</div>' +
+                '<div class="field"><label>Comentario (opcional)</label><textarea name="note" placeholder="Detalle adicional para el administrador"></textarea></div>' +
+                '<p class="hint">No es necesario indicar una fecha de vencimiento. La fecha de la solicitud y la de autorización quedan registradas automáticamente.</p>' +
+                '<div class="notice-box">' + noticeIconSvg() + '<span>Respondemos tu solicitud en un plazo máximo de <strong>24 horas</strong>.</span></div>' +
+                '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Enviar solicitud</button>' +
+              '</form>') +
+          '</div>' +
+          '<div class="card card-pad">' +
+            '<div class="card-title">Mis solicitudes<span style="font-weight:500;color:var(--ink-muted);font-size:.8rem">'+myReqs.length+' registradas</span></div>' +
+            (myReqs.length===0 ? '<div class="table-empty">Aún no registras solicitudes.</div>' :
+            '<div class="table-wrap"><table><thead><tr><th>Tipo</th><th>Cantidad</th><th>Necesaria desde</th><th>Fecha solicitada</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Comentario</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  /* ================= admin view ================= */
+  function adminNav(){
+    var items = [
+      ['solicitudes','Solicitudes'],
+      ['tipos','Tipos de licencia'],
+      ['clientes','Clientes'],
+      ['reporte','Reporte']
+    ];
+    return '<div class="side-nav">' + items.map(function(it){
+      return '<div class="nav-item '+(adminTab===it[0]?'active':'')+'" onclick="App.setAdminTab(\''+it[0]+'\')"><span class="ic">•</span><span class="nav-label">'+it[1]+'</span></div>';
+    }).join('') + '</div>';
+  }
+
+  // Menú desplegable de acciones por fila (Solicitudes/Reporte): agrupa los
+  // botones de acción (aprobar/rechazar/editar/eliminar) detrás de un botón
+  // "⋮" para que la tabla no se vea saturada de botones sueltos.
+  function buildRowMenu(rowId, items){
+    var isOpen = openRowMenu===rowId;
+    // Posición calculada al abrir el menú (ver toggleRowMenu), en coordenadas
+    // de viewport con position:fixed: así el menú no queda recortado por el
+    // overflow-x:auto de la tabla (que en la práctica también recorta el eje
+    // vertical) ni oculto debajo del borde inferior de la pantalla en filas
+    // cercanas al final de la tabla.
+    var style = '';
+    if(isOpen && rowMenuPos){
+      style = 'position:fixed; left:'+rowMenuPos.left+'px; ' +
+        (rowMenuPos.dir==='up' ? 'bottom:'+rowMenuPos.y+'px;' : 'top:'+rowMenuPos.y+'px;');
+    }
+    var menu = isOpen ? (
+      '<div class="row-menu-overlay" onclick="App.closeRowMenu()"></div>' +
+      '<div class="row-menu" style="'+style+'">' +
+        items.map(function(it){
+          return '<button type="button" class="'+(it.cls||'')+'" onclick="App.closeRowMenu(); '+it.onclick+'">'+esc(it.label)+'</button>';
+        }).join('') +
+      '</div>'
+    ) : '';
+    return '<div class="row-menu-wrap">' +
+      '<button type="button" class="row-menu-btn" onclick="App.toggleRowMenu(\''+rowId+'\', event)" aria-label="Acciones">&#8942;</button>' +
+      menu +
+    '</div>';
+  }
+
+  function renderAdminSolicitudes(){
+    var clients = STATE.users.filter(function(u){ return u.role==='client'; });
+    var list = STATE.requests.slice().sort(function(a,b){ return new Date(b.requestedAt)-new Date(a.requestedAt); });
+    if(solFilter.cliente!=='todos') list = list.filter(function(r){ return r.clientUsername===solFilter.cliente; });
+    if(solFilter.estado!=='todos') list = list.filter(function(r){ return r.status===solFilter.estado; });
+
+    var pendingIngram = STATE.requests.filter(function(r){ return r.status==='aprobado' && !r.notifiedToIngram; });
+
+    var allTypes = STATE.licenseTypes;
+    var rows = list.map(function(r){
+      var isEditing = editingRequestId===r.id;
+
+      if(isEditing){
+        var typeOptions = allTypes.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
+        return '<tr class="editing-row">' +
+          '<td></td>' +
+          '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
+          '<td class="wrap">'+esc(r.clientName)+'</td>' +
+          '<td class="wrap"><select class="mini-select" id="edit-type-'+r.id+'">'+typeOptions+'</select></td>' +
+          '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
+          '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
+          '<td class="num">'+money(reqTotal(r))+'</td>' +
+          '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+          '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
+          '<td>—</td>' +
+          '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
+        '</tr>';
+      }
+
+      var menuItems = [];
+      if(r.status==='pendiente'){
+        menuItems.push({label:'Rechazar', cls:'rm-danger', onclick:"App.reviewRequest('"+r.id+"','rechazado')"});
+      }
+      menuItems.push({label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"});
+      menuItems.push({label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"});
+      var actions = (r.status==='pendiente'
+        ? '<button class="btn btn-success btn-sm" onclick="App.reviewRequest(\''+r.id+'\',\'aprobado\')">Aprobar</button> '
+        : '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.reviewedBy||'')+'</span> ') +
+        buildRowMenu(r.id, menuItems);
+      var checkbox = r.status==='aprobado'
+        ? '<input type="checkbox" '+(selectedForIngram.has(r.id)?'checked':'')+' onchange="App.toggleIngramSelect(\''+r.id+'\', this.checked)" />'
+        : '';
+      var notified = r.status!=='aprobado' ? '<span style="color:var(--ink-subtle)">—</span>'
+        : (r.notifiedToIngram
+          ? '<span class="pill status-enviado">Enviado</span>'
+          : '<span class="pill status-sinenviar">Pendiente</span>');
+      return '<tr>' +
+        '<td>'+checkbox+'</td>' +
+        '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
+        '<td class="wrap">'+esc(r.clientName)+'</td>' +
+        '<td class="wrap">'+esc(r.licenseTypeName)+'</td>' +
+        '<td class="num">'+(r.quantity||1)+'</td>' +
+        '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
+        '<td class="num">'+money(reqTotal(r))+'</td>' +
+        '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+        '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
+        '<td>'+notified+'</td>' +
+        '<td>'+actions+'</td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div class="section-head"><h2>Solicitudes</h2><p>Valida las solicitudes de licencia enviadas por tus clientes y envía por correo las que ya están aprobadas para su gestión.</p></div>' +
+    '<div class="settings-bar">' +
+      '<div class="field"><label>Correo de contacto para el envío</label><input type="email" value="'+esc(STATE.settings.ingramEmail||'')+'" placeholder="contacto@proveedor.com" onchange="App.setIngramEmail(this.value)" /></div>' +
+      '<div class="field"><label>Copia (CC), opcional</label><input type="text" value="'+esc(STATE.settings.ingramCc||'')+'" placeholder="correo1@empresa.com, correo2@empresa.com" onchange="App.setIngramCc(this.value)" /></div>' +
+      '<p class="hint">A este correo se enviarán las solicitudes de habilitación de licencias seleccionadas abajo. Puedes agregar varios correos en copia separados por coma.</p>' +
+      '<button type="button" class="btn btn-subtle btn-sm" style="flex-basis:100%;align-self:flex-start" onclick="App.toggleEmailTplEditor()">'+(emailTplOpen?'Ocultar mensaje del correo':'Personalizar mensaje del correo')+'</button>' +
+      (emailTplOpen ?
+        '<div class="field" style="flex-basis:100%"><label>Asunto</label><input id="email-subject-input" value="'+esc(STATE.settings.emailSubjectTemplate||'')+'" onchange="App.setEmailSubject(this.value)" /></div>' +
+        '<div class="field" style="flex-basis:100%"><label>Mensaje</label><textarea id="email-body-input" rows="6" onchange="App.setEmailBody(this.value)">'+esc(STATE.settings.emailBodyTemplate||'')+'</textarea></div>' +
+        '<p class="hint" style="flex-basis:100%">Campos dinámicos disponibles: <code>{{detalle}}</code> (lista de licencias aprobadas seleccionadas), <code>{{cantidad}}</code> (número de solicitudes), <code>{{unidad}}</code> ("solicitud"/"solicitudes"), <code>{{admin}}</code> (tu nombre), <code>{{fecha}}</code> (fecha de envío).</p>' +
+        '<button type="button" class="btn btn-ghost btn-sm" style="flex-basis:100%;align-self:flex-start" onclick="App.resetEmailTemplate()">Restaurar mensaje predeterminado</button>'
+        : '') +
+    '</div>' +
+    '<div class="ingram-bar">' +
+      '<button class="btn btn-subtle btn-sm" onclick="App.selectAllPendingIngram()" '+(pendingIngram.length===0?'disabled':'')+'>Seleccionar aprobadas sin enviar ('+pendingIngram.length+')</button>' +
+      '<span class="count">'+selectedForIngram.size+' seleccionada'+(selectedForIngram.size===1?'':'s')+'</span>' +
+      '<button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="App.sendToIngram()" '+(selectedForIngram.size===0?'disabled':'')+'>Enviar solicitud por correo</button>' +
+    '</div>' +
+    '<div class="toolbar">' +
+      '<div class="field"><label>Cliente</label><select onchange="App.setSolFilter(\'cliente\', this.value)">' +
+        '<option value="todos">Todos</option>' + clients.map(function(c){ return '<option value="'+c.username+'" '+(solFilter.cliente===c.username?'selected':'')+'>'+esc(c.name)+'</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="field"><label>Estado</label><select onchange="App.setSolFilter(\'estado\', this.value)">' +
+        ['todos','pendiente','aprobado','rechazado'].map(function(s){ return '<option value="'+s+'" '+(solFilter.estado===s?'selected':'')+'>'+(s==='todos'?'Todos':s)+'</option>'; }).join('') +
+      '</select></div>' +
+    '</div>' +
+    '<div class="card">' +
+      (list.length===0 ? '<div class="table-empty">No hay solicitudes con estos filtros.</div>' :
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Cantidad</th><th>Necesaria desde</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+    '</div>';
+  }
+
+  function renderAdminTipos(){
+    var rows = STATE.licenseTypes.map(function(t){
+      var usedCount = STATE.requests.filter(function(r){ return r.licenseTypeId===t.id; }).length;
+      return '<tr>' +
+        '<td class="lt-name">'+esc(t.name)+'</td>' +
+        '<td class="num">' +
+          '<div class="num-field"><input class="price-input" id="price-input-'+t.id+'" type="number" min="0" step="0.01" value="'+t.price+'" onchange="App.setTypePrice(\''+t.id+'\', this.value)" />'+numStepper('price-input-'+t.id,0)+'</div>' +
+        '</td>' +
+        '<td><span class="pill status-'+(t.active?'activo':'bloqueado')+'">'+(t.active?'activo':'bloqueado')+'</span></td>' +
+        '<td style="color:var(--ink-subtle)">'+usedCount+' solicitud'+(usedCount===1?'':'es')+'</td>' +
+        '<td>' +
+          '<button class="btn btn-subtle btn-sm" onclick="App.toggleTypeActive(\''+t.id+'\')">'+(t.active?'Bloquear':'Activar')+'</button> ' +
+          '<button class="btn btn-danger btn-sm" '+(usedCount>0?'disabled title="Tiene solicitudes asociadas"':'onclick="App.removeType(\''+t.id+'\')"')+'>Eliminar</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div class="section-head"><h2>Tipos de licencia</h2><p>Define qué licencias pueden solicitar tus clientes y a qué precio.</p></div>' +
+    '<div class="grid-2">' +
+      '<div class="card card-pad">' +
+        '<div class="card-title">Añadir tipo de licencia</div>' +
+        '<form onsubmit="App.addType(event)" class="stack">' +
+          '<div class="field"><label>Nombre</label><input name="name" placeholder="Ej. Google Workspace Business Plus" required /></div>' +
+          '<div class="field"><label>Precio (US$)</label><div class="num-field"><input id="new-type-price" name="price" type="number" min="0" step="0.01" value="0" required />'+numStepper('new-type-price',0)+'</div></div>' +
+          '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Añadir</button>' +
+        '</form>' +
+      '</div>' +
+      '<div class="card">' +
+        (STATE.licenseTypes.length===0 ? '<div class="table-empty">Aún no hay tipos de licencia.</div>' :
+        '<div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Precio</th><th>Estado</th><th>Uso</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderAdminClientes(){
+    var rows = STATE.users.filter(function(u){ return u.role==='client'; }).map(function(u){
+      var reqCount = STATE.requests.filter(function(r){ return r.clientUsername===u.username; }).length;
+
+      if(editingClientId===u.id){
+        return '<tr class="editing-row">' +
+          '<td><input class="mini-input" id="edit-client-name-'+u.id+'" value="'+esc(u.name)+'" /></td>' +
+          '<td><input class="mini-input mono" id="edit-client-username-'+u.id+'" value="'+esc(u.username)+'" /></td>' +
+          '<td colspan="3"><input class="mini-input mono" id="edit-client-password-'+u.id+'" value="'+esc(u.password)+'" placeholder="Contraseña" /></td>' +
+          '<td>' +
+            '<button class="btn btn-primary btn-sm" onclick="App.saveEditClient(\''+u.id+'\')">Guardar</button> ' +
+            '<button class="btn btn-ghost btn-sm" onclick="App.cancelEditClient()">Cancelar</button>' +
+          '</td>' +
+        '</tr>';
+      }
+
+      var pwVisible = !!visibleClientPasswords[u.id];
+      var pwCell = '<span class="mono">'+(pwVisible ? esc(u.password) : '••••••••')+'</span> ' +
+        '<button type="button" class="btn btn-ghost btn-sm" onclick="App.toggleClientPasswordVisible(\''+u.id+'\')">'+(pwVisible?'Ocultar':'Ver')+'</button>';
+
+      return '<tr>' +
+        '<td class="lt-name">'+esc(u.name)+'</td>' +
+        '<td class="mono">'+esc(u.username)+'</td>' +
+        '<td>'+pwCell+'</td>' +
+        '<td><span class="pill status-'+(u.active?'activo':'bloqueado')+'">'+(u.active?'activo':'bloqueado')+'</span></td>' +
+        '<td style="color:var(--ink-subtle)">'+reqCount+' solicitud'+(reqCount===1?'':'es')+'</td>' +
+        '<td>' +
+          '<button class="btn btn-subtle btn-sm" onclick="App.toggleUserActive(\''+u.id+'\')">'+(u.active?'Bloquear':'Activar')+'</button> ' +
+          '<button class="btn btn-ghost btn-sm" onclick="App.startEditClient(\''+u.id+'\')">Editar</button> ' +
+          '<button class="btn btn-danger btn-sm" '+(reqCount>0?'disabled title="Tiene solicitudes asociadas"':'onclick="App.removeUser(\''+u.id+'\')"')+'>Eliminar</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div class="section-head"><h2>Clientes</h2><p>Crea y administra las cuentas con acceso al portal.</p></div>' +
+    '<div class="grid-2">' +
+      '<div class="card card-pad">' +
+        '<div class="card-title">Añadir cliente</div>' +
+        '<form onsubmit="App.addClient(event)" class="stack">' +
+          '<div class="field"><label>Nombre / empresa</label><input name="name" placeholder="Ej. Beta Consultores S.A.C." required /></div>' +
+          '<div class="field"><label>Usuario</label><input name="username" placeholder="usuario de acceso" required /></div>' +
+          '<div class="field"><label>Contraseña</label><input name="password" placeholder="contraseña inicial" required /></div>' +
+          '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Crear cuenta</button>' +
+        '</form>' +
+      '</div>' +
+      '<div class="card">' +
+        '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Usuario</th><th>Contraseña</th><th>Estado</th><th>Uso</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function quickRangeDates(key){
+    var now = new Date();
+    var y = now.getFullYear(), m = now.getMonth();
+    function ymd(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+    if(key==='mes'){ return { from: ymd(new Date(y,m,1)), to: ymd(new Date(y,m+1,0)) }; }
+    if(key==='mes-ant'){ return { from: ymd(new Date(y,m-1,1)), to: ymd(new Date(y,m,0)) }; }
+    if(key==='trimestre'){ return { from: ymd(new Date(y,m-2,1)), to: ymd(new Date(y,m+1,0)) }; }
+    return { from: null, to: null };
+  }
+
+  function numStepper(id, min){
+    return '<span class="num-stepper">' +
+      '<button type="button" tabindex="-1" onclick="App.stepNumber(\''+id+'\', 1, '+(min==null?'null':min)+')">&#9650;</button>' +
+      '<button type="button" tabindex="-1" onclick="App.stepNumber(\''+id+'\', -1, '+(min==null?'null':min)+')">&#9660;</button>' +
+    '</span>';
+  }
+  function noticeIconSvg(){
+    return '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px">'+
+      '<circle cx="12" cy="12" r="9"></circle>'+
+      '<line x1="12" y1="8" x2="12" y2="13"></line>'+
+      '<line x1="12" y1="16" x2="12.01" y2="16"></line>'+
+    '</svg>';
+  }
+  function calendarIconSvg(){
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+
+      '<rect x="3" y="4" width="18" height="18" rx="3"></rect>'+
+      '<line x1="16" y1="2" x2="16" y2="6"></line>'+
+      '<line x1="8" y1="2" x2="8" y2="6"></line>'+
+      '<line x1="3" y1="10" x2="21" y2="10"></line>'+
+    '</svg>';
+  }
+  function ymdFromParts(y,m,d){ return y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+  function monthLabel(cursor){
+    var p = cursor.split('-'); var d = new Date(Number(p[0]), Number(p[1])-1, 1);
+    var s = d.toLocaleDateString('es-PE', {month:'long', year:'numeric'});
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  function buildCalendarDays(cursor){
+    var p = cursor.split('-'); var y = Number(p[0]), m = Number(p[1])-1;
+    var startWeekday = new Date(y,m,1).getDay();
+    var daysInMonth = new Date(y,m+1,0).getDate();
+    var totalCells = Math.ceil((startWeekday+daysInMonth)/7)*7;
+    var cells = [];
+    for(var i=0;i<totalCells;i++){
+      var dayNum = i - startWeekday + 1;
+      var cellDate = new Date(y,m,dayNum);
+      cells.push({
+        ymd: ymdFromParts(cellDate.getFullYear(), cellDate.getMonth(), cellDate.getDate()),
+        day: cellDate.getDate(),
+        outside: dayNum<1 || dayNum>daysInMonth
+      });
+    }
+    return cells;
+  }
+  function renderDatePicker(){
+    if(!reportPicker.open) return '';
+    var cursor = reportPicker.cursor || (reportFilter.from || todayYmd()).slice(0,7);
+    var cells = buildCalendarDays(cursor);
+    var today = todayYmd();
+    var weekDays = ['DO','LU','MA','MI','JU','VI','SA'];
+    var from = reportFilter.from, to = reportFilter.to;
+    var rows = '';
+    for(var w=0; w<cells.length; w+=7){
+      rows += '<div class="cal-row">';
+      for(var i=w;i<w+7;i++){
+        var c = cells[i];
+        var cls = 'cal-day';
+        if(c.outside) cls += ' outside';
+        if(c.ymd===today) cls += ' today';
+        if(from && to && c.ymd>from && c.ymd<to) cls += ' in-range';
+        if(from && c.ymd===from) cls += ' range-start';
+        if(to && c.ymd===to) cls += ' range-end';
+        rows += '<button type="button" class="'+cls+'" onclick="App.pickReportDate(\''+c.ymd+'\')">'+c.day+'</button>';
+      }
+      rows += '</div>';
+    }
+    return '<div class="cal-overlay" onclick="App.closeDatePicker()"></div>' +
+    '<div class="cal-popover">' +
+      '<div class="cal-header">' +
+        '<button type="button" class="cal-nav" onclick="App.pickerNav(-1)">&#8249;</button>' +
+        '<div class="cal-month">'+monthLabel(cursor)+'</div>' +
+        '<button type="button" class="cal-nav" onclick="App.pickerNav(1)">&#8250;</button>' +
+      '</div>' +
+      '<div class="cal-weekdays">' + weekDays.map(function(w){ return '<span>'+w+'</span>'; }).join('') + '</div>' +
+      '<div class="cal-grid">' + rows + '</div>' +
+      '<div class="cal-footer">' +
+        '<button type="button" class="cal-link" onclick="App.clearReportRange()">Borrar</button>' +
+        '<button type="button" class="cal-link" onclick="App.reportRangeToday()">Hoy</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderAdminReporte(){
+    if(reportFilter.from===null && reportFilter.to===null && reportFilter.quick){
+      var qd = quickRangeDates(reportFilter.quick);
+      reportFilter.from = qd.from; reportFilter.to = qd.to;
+    }
+    var clients = STATE.users.filter(function(u){ return u.role==='client'; });
+    var list = STATE.requests.filter(function(r){
+      var reqDate = dateOnly(r.requestedAt);
+      if(reportFilter.from && reqDate < reportFilter.from) return false;
+      if(reportFilter.to && reqDate > reportFilter.to) return false;
+      if(reportFilter.cliente!=='todos' && r.clientUsername!==reportFilter.cliente) return false;
+      if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
+      if(reportFilter.tipo!=='todos' && r.licenseTypeId!==reportFilter.tipo) return false;
+      return true;
+    }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
+
+    var totalSolicitudes = list.length;
+    var aprobadas = list.filter(function(r){ return r.status==='aprobado'; });
+    var montoAprobado = aprobadas.reduce(function(s,r){ return s + reqTotal(r); }, 0);
+    var totalLicencias = list.reduce(function(s,r){ return s + Number(r.quantity||1); }, 0);
+
+    var allTypesReporte = STATE.licenseTypes;
+    var rows = list.map(function(r){
+      if(editingRequestId===r.id){
+        var typeOptionsR = allTypesReporte.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
+        return '<tr class="editing-row">' +
+          '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
+          '<td class="wrap">'+esc(r.clientName)+'</td>' +
+          '<td class="wrap"><select class="mini-select" id="edit-type-'+r.id+'">'+typeOptionsR+'</select></td>' +
+          '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
+          '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
+          '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+          '<td class="num">'+money(reqTotal(r))+'</td>' +
+          '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
+          '<td style="color:var(--ink-subtle)">'+esc(r.reviewedBy||'—')+'</td>' +
+          '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
+        '</tr>';
+      }
+      return '<tr>' +
+        '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
+        '<td class="wrap">'+esc(r.clientName)+'</td>' +
+        '<td class="wrap">'+esc(r.licenseTypeName)+'</td>' +
+        '<td class="num">'+(r.quantity||1)+'</td>' +
+        '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
+        '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+        '<td class="num">'+money(reqTotal(r))+'</td>' +
+        '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
+        '<td style="color:var(--ink-subtle)">'+esc(r.reviewedBy||'—')+'</td>' +
+        '<td>'+buildRowMenu(r.id, [
+          {label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"},
+          {label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"}
+        ])+'</td>' +
+      '</tr>';
+    }).join('');
+
+    var quicks = [['mes','Este mes'],['mes-ant','Mes anterior'],['trimestre','Últimos 3 meses']];
+
+    return '<div class="section-head"><h2>Reporte</h2><p>Consulta la cantidad de licencias solicitadas y su aprobación por periodo.</p></div>' +
+    '<div class="toolbar">' +
+      '<div class="field"><label>Periodo</label><div class="quick-range">' + quicks.map(function(q){
+        return '<button type="button" class="btn btn-subtle btn-sm '+(reportFilter.quick===q[0]?'active':'')+'" onclick="App.setReportQuick(\''+q[0]+'\')">'+q[1]+'</button>';
+      }).join('') + '</div></div>' +
+      '<div class="field"><label>Rango de fechas</label><div class="cal-trigger-wrap">' +
+        '<button type="button" class="cal-trigger" onclick="App.toggleDatePicker()">' + calendarIconSvg() +
+          '<span>' + (reportFilter.from||reportFilter.to ? (fmtDateShort(reportFilter.from)+' – '+fmtDateShort(reportFilter.to)) : 'Seleccionar rango') + '</span>' +
+        '</button>' +
+        renderDatePicker() +
+      '</div></div>' +
+      '<div class="field"><label>Cliente</label><select onchange="App.setReportFilter(\'cliente\', this.value)">' +
+        '<option value="todos">Todos</option>' + clients.map(function(c){ return '<option value="'+c.username+'" '+(reportFilter.cliente===c.username?'selected':'')+'>'+esc(c.name)+'</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="field"><label>Estado</label><select onchange="App.setReportFilter(\'estado\', this.value)">' +
+        ['todos','pendiente','aprobado','rechazado'].map(function(s){ return '<option value="'+s+'" '+(reportFilter.estado===s?'selected':'')+'>'+(s==='todos'?'Todos':s)+'</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="field"><label>Tipo de licencia</label><select onchange="App.setReportFilter(\'tipo\', this.value)">' +
+        '<option value="todos">Todos</option>' + STATE.licenseTypes.map(function(t){ return '<option value="'+t.id+'" '+(reportFilter.tipo===t.id?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('') +
+      '</select></div>' +
+      '<button class="btn btn-primary" style="margin-left:auto" onclick="App.exportReport()">Descargar reporte (CSV)</button>' +
+    '</div>' +
+    '<div class="stat-row" style="margin-bottom:1.2rem">' +
+      '<div class="stat-tile"><div class="label">Solicitudes</div><div class="value">'+totalSolicitudes+'</div></div>' +
+      '<div class="stat-tile"><div class="label">Aprobadas</div><div class="value teal">'+aprobadas.length+'</div></div>' +
+      '<div class="stat-tile"><div class="label">Monto aprobado</div><div class="value accent">'+money(montoAprobado)+'</div></div>' +
+      '<div class="stat-tile"><div class="label">Licencias solicitadas</div><div class="value">'+totalLicencias+'</div></div>' +
+    '</div>' +
+    '<div class="card">' +
+      (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Cantidad</th><th>Necesaria desde</th><th>Estado</th><th>Precio</th><th>Fecha autorizada</th><th>Revisado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+    '</div>';
+  }
+
+  function renderAdmin(user){
+    var body;
+    if(adminTab==='solicitudes') body = renderAdminSolicitudes();
+    else if(adminTab==='tipos') body = renderAdminTipos();
+    else if(adminTab==='clientes') body = renderAdminClientes();
+    else body = renderAdminReporte();
+
+    return topbar(user, 'Administrador') +
+    '<div class="app-body">' + adminNav() + '<div class="main-area">' + body + '</div></div>';
+  }
+
+  /* ================= main render ================= */
+  function render(){
+    var html;
+    if(resetTokenFromUrl){
+      html = renderResetPasswordScreen();
+    } else {
+      var user = currentUser();
+      if(!user) html = renderLogin();
+      else if(user.role==='admin') html = renderAdmin(user);
+      else html = renderClient(user);
+    }
+    document.getElementById('root').innerHTML = html;
+  }
+
+  /* ================= actions (exposed) ================= */
+  var App = {
+    setLoginRole: function(r){ loginRole = r; loginError=''; render(); },
+    stepNumber: function(id, dir, min){
+      var el = document.getElementById(id);
+      if(!el) return;
+      var step = parseFloat(el.step) || 1;
+      var val = parseFloat(el.value);
+      if(isNaN(val)) val = (min!=null ? min : 0);
+      var next = val + dir*step;
+      if(min!=null && next<min) next = min;
+      var decimals = (String(step).split('.')[1]||'').length;
+      next = Number(next.toFixed(decimals));
+      el.value = next;
+      el.dispatchEvent(new Event('input', {bubbles:true}));
+      el.dispatchEvent(new Event('change', {bubbles:true}));
+    },
+    toggleTheme: function(){ currentTheme = currentTheme==='dark' ? 'light' : 'dark'; applyTheme(); render(); },
+    submitLogin: async function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      await tryLogin(f.username.value.trim(), f.password.value);
+    },
+    logout: logout,
+    startForgotPassword: function(ev){
+      if(ev) ev.preventDefault();
+      forgotPasswordOpen = true;
+      forgotPasswordSent = false;
+      forgotPasswordBusy = false;
+      render();
+    },
+    cancelForgotPassword: function(ev){
+      if(ev) ev.preventDefault();
+      forgotPasswordOpen = false;
+      forgotPasswordSent = false;
+      forgotPasswordBusy = false;
+      render();
+    },
+    submitForgotPassword: async function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var username = f.username.value.trim();
+      forgotPasswordBusy = true;
+      render();
+      try{
+        await fetch('/api/request-password-reset', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+          body: JSON.stringify({ username: username })
+        });
+      }catch(e){ /* si no hay backend, no podemos hacer nada más aquí */ }
+      forgotPasswordBusy = false;
+      forgotPasswordSent = true;
+      render();
+    },
+    goToLoginAfterReset: function(){
+      try{
+        var url = new URL(window.location.href);
+        url.searchParams.delete('resetToken');
+        window.history.replaceState({}, '', url.toString());
+      }catch(e){}
+      resetTokenFromUrl = null;
+      resetPasswordState = { busy:false, done:false, error:'' };
+      render();
+    },
+    submitResetPassword: async function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var newPassword = f.newPassword.value;
+      var confirmPassword = f.confirmPassword.value;
+      if(!newPassword || newPassword.length<8 || newPassword!==confirmPassword){
+        resetPasswordState = { busy:false, done:false, error:'invalid_input' };
+        render();
+        return;
+      }
+      resetPasswordState = { busy:true, done:false, error:'' };
+      render();
+      try{
+        var resp = await fetch('/api/reset-password', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+          body: JSON.stringify({ token: resetTokenFromUrl, newPassword: newPassword })
+        });
+        var data = await resp.json().catch(function(){ return {}; });
+        if(resp.ok && data.ok){
+          resetPasswordState = { busy:false, done:true, error:'' };
+        } else {
+          resetPasswordState = { busy:false, done:false, error: data.error || 'server_error' };
+        }
+      }catch(e){
+        resetPasswordState = { busy:false, done:false, error:'server_error' };
+      }
+      render();
+    },
+    setAdminTab: function(t){ adminTab = t; saveUiState(); render(); },
+
+    submitRequest: function(ev){
+      ev.preventDefault();
+      var user = currentUser();
+      var f = ev.target;
+      var typeId = f.licenseTypeId.value;
+      var type = STATE.licenseTypes.find(function(t){ return t.id===typeId; });
+      var qty = Math.max(1, parseInt(f.quantity.value, 10) || 1);
+      var newReq = {
+        id: uid('r'),
+        clientUsername: user.username,
+        clientName: user.name,
+        licenseTypeId: typeId,
+        licenseTypeName: type ? type.name : '—',
+        price: type ? type.price : 0,
+        quantity: qty,
+        neededFrom: f.neededFrom.value,
+        note: f.note.value.trim(),
+        requestedAt: new Date().toISOString(),
+        status: 'pendiente', reviewedBy: null, reviewedAt: null,
+        notifiedToIngram: false, notifiedAt: null, notifiedBy: null
+      };
+      commit(function(s){ s.requests.push(newReq); });
+      showToast('Solicitud enviada.', 'success');
+      notifyNewRequest(newReq);
+    },
+
+    reviewRequest: function(id, status){
+      var user = currentUser();
+      commit(function(s){
+        var r = s.requests.find(function(x){ return x.id===id; });
+        if(!r) return;
+        r.status = status; r.reviewedBy = user.name; r.reviewedAt = new Date().toISOString();
+      });
+    },
+    setSolFilter: function(k,v){ solFilter[k]=v; saveUiState(); render(); },
+
+    startEditRequest: function(id){ editingRequestId = id; render(); },
+    cancelEditRequest: function(){ editingRequestId = null; render(); },
+    saveEditRequest: function(id){
+      var typeEl = document.getElementById('edit-type-'+id);
+      var qtyEl = document.getElementById('edit-qty-'+id);
+      var dateEl = document.getElementById('edit-date-'+id);
+      var qty = Math.max(1, parseInt(qtyEl.value, 10) || 1);
+      var neededFrom = dateEl.value;
+      if(!neededFrom){ showToast('Indica la fecha en que se necesita la licencia.', 'error'); return; }
+      var typeId = typeEl.value;
+      var type = STATE.licenseTypes.find(function(t){ return t.id===typeId; });
+      editingRequestId = null;
+      commit(function(s){
+        var r = s.requests.find(function(x){ return x.id===id; });
+        if(!r) return;
+        r.quantity = qty;
+        r.neededFrom = neededFrom;
+        if(type){ r.licenseTypeId = type.id; r.licenseTypeName = type.name; r.price = type.price; }
+      });
+      showToast('Solicitud actualizada.', 'success');
+    },
+    removeRequest: function(id){
+      if(!confirm('¿Eliminar esta solicitud? Esta acción no se puede deshacer.')) return;
+      commit(function(s){ s.requests = s.requests.filter(function(x){ return x.id!==id; }); });
+      selectedForIngram.delete(id);
+      showToast('Solicitud eliminada.', 'success');
+    },
+    toggleRowMenu: function(id, evt){
+      if(openRowMenu===id){
+        openRowMenu = null; rowMenuPos = null;
+      } else {
+        var rect = evt.currentTarget.getBoundingClientRect();
+        var menuHeightEstimate = 170; // suficiente para hasta ~4 opciones
+        var openUp = (window.innerHeight - rect.bottom) < menuHeightEstimate && rect.top > menuHeightEstimate;
+        openRowMenu = id;
+        rowMenuPos = {
+          left: Math.max(8, rect.right - 160),
+          dir: openUp ? 'up' : 'down',
+          y: openUp ? (window.innerHeight - rect.top + 6) : (rect.bottom + 6)
+        };
+      }
+      render();
+    },
+    closeRowMenu: function(){ openRowMenu = null; rowMenuPos = null; render(); },
+
+    setIngramEmail: function(val){
+      commit(function(s){ s.settings.ingramEmail = val.trim(); });
+      showToast('Correo de contacto actualizado.', 'success');
+    },
+    setIngramCc: function(val){
+      commit(function(s){ s.settings.ingramCc = val.trim(); });
+      showToast('Copia (CC) actualizada.', 'success');
+    },
+    toggleEmailTplEditor: function(){ emailTplOpen = !emailTplOpen; render(); },
+    setEmailSubject: function(val){
+      commit(function(s){ s.settings.emailSubjectTemplate = val; });
+      showToast('Asunto del correo actualizado.', 'success');
+    },
+    setEmailBody: function(val){
+      commit(function(s){ s.settings.emailBodyTemplate = val; });
+      showToast('Mensaje del correo actualizado.', 'success');
+    },
+    resetEmailTemplate: function(){
+      commit(function(s){ s.settings.emailSubjectTemplate = DEFAULT_EMAIL_SUBJECT; s.settings.emailBodyTemplate = DEFAULT_EMAIL_BODY; });
+      showToast('Mensaje restaurado al predeterminado.', 'success');
+    },
+    toggleIngramSelect: function(id, checked){
+      if(checked) selectedForIngram.add(id); else selectedForIngram.delete(id);
+      render();
+    },
+    selectAllPendingIngram: function(){
+      STATE.requests.forEach(function(r){ if(r.status==='aprobado' && !r.notifiedToIngram) selectedForIngram.add(r.id); });
+      render();
+    },
+    sendToIngram: async function(){
+      var ingramEmail = (STATE.settings.ingramEmail||'').trim();
+      if(!ingramEmail){ showToast('Configura primero el correo de contacto para el envío.', 'error'); return; }
+      var ccList = parseEmailList(STATE.settings.ingramCc);
+      var ids = Array.from(selectedForIngram);
+      var items = STATE.requests.filter(function(r){ return ids.indexOf(r.id)>-1 && r.status==='aprobado'; });
+      if(items.length===0){ showToast('Selecciona al menos una solicitud aprobada.', 'error'); return; }
+
+      var admin = currentUser();
+      var detalle = items.map(function(r){
+        return '- ' + r.licenseTypeName + ' | Cantidad: ' + (r.quantity||1) + ' | Cliente: ' + r.clientName + ' | Habilitar desde: ' + fmtDateShort(r.neededFrom);
+      }).join('\n');
+      var htmlRows = items.map(function(r){
+        return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center">'+(r.quantity||1)+'</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+fmtDateShort(r.neededFrom)+'</td></tr>';
+      }).join('');
+      var detalleHtml = '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
+        '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Habilitar desde</th></tr>' +
+        htmlRows + '</table>';
+      var tplVars = {
+        cantidad: items.length,
+        unidad: items.length===1 ? 'solicitud' : 'solicitudes',
+        detalle: detalle,
+        admin: admin ? admin.name : 'Moventi',
+        fecha: fmtDate(new Date().toISOString())
+      };
+      var subject = renderTemplate(STATE.settings.emailSubjectTemplate || DEFAULT_EMAIL_SUBJECT, tplVars);
+      var body = renderTemplate(STATE.settings.emailBodyTemplate || DEFAULT_EMAIL_BODY, tplVars);
+      var htmlBody = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
+        renderTemplateHtml(STATE.settings.emailBodyTemplate || DEFAULT_EMAIL_BODY, tplVars, {detalle: detalleHtml}) +
+        '</div>';
+
+      if(!mcpCap){
+        // Outside the Claude artifact runtime there's no connected Gmail via
+        // Claude — but if this build is hosted with the /api/send-email
+        // backend (see portal-licencias-vercel/api/send-email.js), try that
+        // first for true automatic sending before falling back to mailto.
+        try{
+          var apiResp = await fetch('/api/send-email', {
+            method: 'POST',
+            headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+            body: JSON.stringify({ to: ingramEmail, cc: ccList, subject: subject, text: body, html: htmlBody })
+          });
+          if(apiResp.ok){
+            commit(function(s){
+              s.requests.forEach(function(r){
+                if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
+                  r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null;
+                }
+              });
+            });
+            selectedForIngram.clear();
+            render();
+            showToast('Correo enviado (' + items.length + ' solicitud' + (items.length===1?'':'es') + ').', 'success');
+            return;
+          }
+          console.warn('send-email API respondió con error, usando mailto como respaldo', await apiResp.text().catch(function(){return '';}));
+        }catch(e){
+          // No backend disponible en este hosting (p.ej. dentro del artifact de Claude) — seguimos con mailto.
+        }
+
+        // Fallback: abrir el cliente de correo del administrador con el mensaje prefijado.
+        var mailto = 'mailto:' + encodeURIComponent(ingramEmail) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body) +
+          (ccList.length ? '&cc=' + encodeURIComponent(ccList.join(',')) : '');
+        window.location.href = mailto;
+        commit(function(s){
+          s.requests.forEach(function(r){
+            if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
+              r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null;
+            }
+          });
+        });
+        selectedForIngram.clear();
+        render();
+        showToast('Se abrió tu cliente de correo con el mensaje listo — revisa y presiona enviar ahí.', 'info');
+        return;
+      }
+
+      try{
+        var result = await mcpCap.callTool('Gmail', 'send_message', { to: [ingramEmail], cc: ccList, subject: subject, body: body, htmlBody: htmlBody });
+        commit(function(s){
+          s.requests.forEach(function(r){
+            if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
+              r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null;
+            }
+          });
+        });
+        selectedForIngram.clear();
+        render();
+        showToast('Correo enviado (' + items.length + ' solicitud' + (items.length===1?'':'es') + ').', 'success');
+      }catch(err){
+        var code = err && err.code;
+        if(code==='needs_reauth' || code==='server_not_connected' || code==='selection_required'){
+          showToast('Conecta o reconecta Gmail en claude.ai → Ajustes → Conectores.', 'error');
+        }else if(code==='blocked_by_policy'){
+          showToast('Tu organización bloquea el envío desde este conector.', 'error');
+        }else if(code==='approval_required'){
+          showToast('Este envío requiere aprobación de tu organización.', 'error');
+        }else if(code==='tool_error'){
+          showToast('Gmail rechazó el envío: ' + (err.message||'error desconocido'), 'error');
+        }else if(code==='not_in_manifest' || code==='not_granted' || code==='capability_disabled'){
+          showToast('El envío por Gmail no está disponible en esta vista.', 'error');
+        }else{
+          showToast('No se pudo enviar el correo. Intenta de nuevo.', 'error');
+        }
+        console.error(err);
+      }
+    },
+
+    addType: function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var name = f.name.value.trim();
+      var price = Number(f.price.value)||0;
+      if(!name) return;
+      commit(function(s){ s.licenseTypes.push({ id: uid('lt'), name: name, price: price, active: true }); });
+      showToast('Tipo de licencia añadido.', 'success');
+    },
+    setTypePrice: function(id, val){
+      var price = Number(val)||0;
+      commit(function(s){ var t = s.licenseTypes.find(function(x){return x.id===id;}); if(t){ t.price = price; s.requests.forEach(function(r){ if(r.licenseTypeId===id && r.status==='pendiente') r.price = price; }); } });
+    },
+    toggleTypeActive: function(id){
+      commit(function(s){ var t = s.licenseTypes.find(function(x){return x.id===id;}); if(t) t.active = !t.active; });
+    },
+    removeType: function(id){
+      commit(function(s){ s.licenseTypes = s.licenseTypes.filter(function(x){ return x.id!==id; }); });
+      showToast('Tipo de licencia eliminado.', 'success');
+    },
+
+    addClient: function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var username = f.username.value.trim();
+      if(STATE.users.some(function(u){ return u.username===username; })){ showToast('Ese usuario ya existe.', 'error'); return; }
+      commit(function(s){
+        s.users.push({ id: uid('u'), username: username, password: f.password.value, role: 'client', name: f.name.value.trim(), active: true });
+      });
+      showToast('Cuenta de cliente creada.', 'success');
+    },
+    toggleUserActive: function(id){
+      commit(function(s){ var u = s.users.find(function(x){return x.id===id;}); if(u) u.active = !u.active; });
+    },
+    resetPassword: function(id){
+      var pass = prompt('Nueva contraseña para esta cuenta:');
+      if(!pass) return;
+      commit(function(s){ var u = s.users.find(function(x){return x.id===id;}); if(u) u.password = pass; });
+      showToast('Contraseña actualizada.', 'success');
+    },
+    toggleClientPasswordVisible: function(id){
+      visibleClientPasswords[id] = !visibleClientPasswords[id];
+      render();
+    },
+    startEditClient: function(id){
+      editingClientId = id;
+      render();
+    },
+    cancelEditClient: function(){
+      editingClientId = null;
+      render();
+    },
+    saveEditClient: function(id){
+      var nameEl = document.getElementById('edit-client-name-'+id);
+      var usernameEl = document.getElementById('edit-client-username-'+id);
+      var passwordEl = document.getElementById('edit-client-password-'+id);
+      var name = (nameEl.value||'').trim();
+      var username = (usernameEl.value||'').trim();
+      var password = passwordEl.value;
+      if(!name || !username || !password){ showToast('Completa nombre, usuario y contraseña.', 'error'); return; }
+      var clash = STATE.users.some(function(u){ return u.id!==id && u.username===username; });
+      if(clash){ showToast('Ese usuario ya existe.', 'error'); return; }
+      commit(function(s){
+        var u = s.users.find(function(x){ return x.id===id; });
+        if(!u) return;
+        var oldUsername = u.username;
+        u.name = name; u.username = username; u.password = password;
+        if(oldUsername!==username){
+          s.requests.forEach(function(r){ if(r.clientUsername===oldUsername) r.clientUsername = username; });
+        }
+      });
+      editingClientId = null;
+      showToast('Cliente actualizado.', 'success');
+    },
+    removeUser: function(id){
+      commit(function(s){ s.users = s.users.filter(function(x){ return x.id!==id; }); });
+      showToast('Cuenta eliminada.', 'success');
+    },
+
+    setReportQuick: function(key){ var qd = quickRangeDates(key); reportFilter.quick = key; reportFilter.from = qd.from; reportFilter.to = qd.to; reportPicker.open=false; saveUiState(); render(); },
+    toggleDatePicker: function(){
+      reportPicker.open = !reportPicker.open;
+      if(reportPicker.open){
+        reportPicker.cursor = (reportFilter.from || todayYmd()).slice(0,7);
+        reportPicker.step = (reportFilter.from && !reportFilter.to) ? 'to' : 'from';
+      }
+      render();
+    },
+    closeDatePicker: function(){ reportPicker.open = false; render(); },
+    pickerNav: function(dir){
+      var p = reportPicker.cursor.split('-'); var y=Number(p[0]), m=Number(p[1])-1;
+      var d = new Date(y, m+dir, 1);
+      reportPicker.cursor = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+      render();
+    },
+    pickReportDate: function(ymd){
+      if(reportPicker.step==='from' || !reportFilter.from){
+        reportFilter.quick = null; reportFilter.from = ymd; reportFilter.to = null;
+        reportPicker.step = 'to';
+        render();
+      } else if(ymd < reportFilter.from){
+        reportFilter.from = ymd; reportFilter.to = null;
+        render();
+      } else {
+        reportFilter.to = ymd;
+        reportPicker.step = 'from';
+        reportPicker.open = false;
+        saveUiState(); render();
+      }
+    },
+    clearReportRange: function(){
+      reportFilter.quick = null; reportFilter.from = null; reportFilter.to = null;
+      reportPicker.step = 'from';
+      saveUiState(); render();
+    },
+    reportRangeToday: function(){
+      var t = todayYmd();
+      reportFilter.quick = null; reportFilter.from = t; reportFilter.to = t;
+      reportPicker.open = false; reportPicker.step = 'from';
+      saveUiState(); render();
+    },
+    setReportFilter: function(k,v){ reportFilter[k]=v; saveUiState(); render(); },
+    exportReport: function(){
+      var list = STATE.requests.filter(function(r){
+        var reqDate = dateOnly(r.requestedAt);
+        if(reportFilter.from && reqDate < reportFilter.from) return false;
+        if(reportFilter.to && reqDate > reportFilter.to) return false;
+        if(reportFilter.cliente!=='todos' && r.clientUsername!==reportFilter.cliente) return false;
+        if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
+        if(reportFilter.tipo!=='todos' && r.licenseTypeId!==reportFilter.tipo) return false;
+        return true;
+      }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
+      function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
+      var header = ['Fecha solicitada','Cliente','Tipo de licencia','Cantidad','Necesaria desde','Estado','Precio total (US$)','Fecha autorizada','Revisado por'];
+      var lines = [header.join(';')];
+      list.forEach(function(r){
+        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.reviewedAt?dateOnly(r.reviewedAt):'', r.reviewedBy||''].map(csvField).join(';'));
+      });
+      var totalAprobado = list.filter(function(r){return r.status==='aprobado';}).reduce(function(s,r){return s+reqTotal(r);},0);
+      lines.push('');
+      lines.push(['Total solicitudes', list.length].map(csvField).join(';'));
+      lines.push(['Monto aprobado', totalAprobado.toFixed(2)].map(csvField).join(';'));
+      var fname = 'reporte_licencias_'+(reportFilter.from||'inicio')+'_a_'+(reportFilter.to||'fin')+'.csv';
+      downloadCsv(fname, lines.join('\n'));
+    }
+  };
+  window.App = App;
+
+  /* ================= boot ================= */
+  async function boot(){
+    initTheme();
+    restoreUiState();
+    try{
+      if(window.claude && window.claude.use){
+        artifactCap = await window.claude.use('artifact');
+        downloadsCap = await window.claude.use('downloads');
+        mcpCap = await window.claude.use('mcp');
+      }
+    }catch(e){ console.warn('capability init failed', e); }
+    if(!artifactCap){
+      // Cargamos primero desde localStorage (por si el backend tarda o no
+      // responde, no arrancamos en blanco), y lo reemplazamos si el backend
+      // (Vercel Blob) contesta con datos.
+      var savedLocal = loadLocalFallbackState();
+      if(savedLocal) STATE = savedLocal;
+      var remoteRes = await fetchRemoteState();
+      if(remoteRes){
+        stateBackendAvailable = true;
+        if(remoteRes.state){
+          STATE = remoteRes.state;
+          baseRemoteState = JSON.parse(JSON.stringify(STATE));
+          saveLocalFallbackState();
+        } else {
+          // El backend aún no tiene nada guardado (primera vez): lo
+          // inicializamos con el estado semilla/actual de este navegador.
+          try{
+            await saveRemoteState(STATE);
+            baseRemoteState = JSON.parse(JSON.stringify(STATE));
+          }catch(e){ console.error(e); }
+        }
+      } else {
+        showToast('No se pudo conectar con el servidor: los datos se guardan solo en este navegador mientras tanto.', 'info');
+      }
+    }
+    capReady = true;
+    render();
+    if(stateBackendAvailable){
+      document.addEventListener('visibilitychange', function(){
+        if(document.visibilityState === 'visible') refreshFromRemoteIfIdle();
+      });
+      window.addEventListener('focus', function(){ refreshFromRemoteIfIdle(); });
+      setInterval(function(){
+        if(document.visibilityState === 'visible') refreshFromRemoteIfIdle();
+      }, 30000);
+    }
+  }
+  boot();
+})();
