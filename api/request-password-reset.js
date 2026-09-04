@@ -39,7 +39,10 @@ module.exports = async function handler(req, res) {
 
       var proto = req.headers['x-forwarded-proto'] || 'https';
       var origin = proto + '://' + req.headers.host;
-      var link = origin + '/?resetToken=' + token;
+      // El link va a /admin (no a la raíz): desde que la página de
+      // administrador vive separada de la de clientes, "/" es la puerta de
+      // clientes y el flujo de "olvidé mi contraseña" es exclusivo del admin.
+      var link = origin + '/admin?resetToken=' + token;
 
       var subject = 'Restablecer contraseña — Portal de licencias Moventi';
       var text =
