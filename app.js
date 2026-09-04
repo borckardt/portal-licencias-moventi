@@ -460,8 +460,8 @@
           '<h2 style="font-size:1.3rem;font-weight:800;margin-bottom:.3rem">Inicia sesión</h2>' +
           '<p style="color:var(--ink-muted);font-size:.88rem;margin-bottom:1.4rem">' + (ENTRY_MODE==='admin' ? 'Acceso exclusivo para el equipo de Moventi.' : 'Ingresa con las credenciales de tu empresa.') + '</p>' +
           '<form onsubmit="App.submitLogin(event)" class="stack">' +
-            '<div class="field"><label>Usuario</label><input name="username" autocomplete="username" required /></div>' +
-            '<div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="current-password" required /></div>' +
+            '<div class="field"><label>Usuario</label><input name="username" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required /></div>' +
+            '<div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="new-password" required /></div>' +
             '<button class="btn btn-primary" style="margin-top:.4rem;width:100%" type="submit">Ingresar</button>' +
           '</form>' +
           (loginError ? '<div class="login-error">'+esc(loginError)+'</div>' : '') +
@@ -1514,6 +1514,14 @@
       // (Vercel Blob) contesta con datos.
       var savedLocal = loadLocalFallbackState();
       if(savedLocal) STATE = savedLocal;
+      // El login (con los datos semilla/locales) se muestra de inmediato:
+      // no bloqueamos la primera pantalla esperando al backend, porque
+      // Vercel Blob a veces tarda varios segundos (o más) en responder y
+      // eso dejaba la pantalla en negro todo ese tiempo. La sincronización
+      // con el backend sigue en segundo plano y vuelve a pintar cuando
+      // llega.
+      capReady = true;
+      render();
       var remoteRes = await fetchRemoteState();
       if(remoteRes){
         stateBackendAvailable = true;
@@ -1529,9 +1537,17 @@
             baseRemoteState = JSON.parse(JSON.stringify(STATE));
           }catch(e){ console.error(e); }
         }
+        // Si ya hay una sesión iniciada (currentUser), sí conviene refrescar
+        // la pantalla con los datos remotos recién llegados. Pero si seguimos
+        // en el login, NO volvemos a pintar: el formulario de login no
+        // depende de STATE (los usuarios se leen recién al hacer submit), y
+        // repintar aquí borraría lo que la persona ya haya escrito en
+        // usuario/contraseña mientras esperaba al backend.
+        if(currentUser()) render();
       } else {
         showToast('No se pudo conectar con el servidor: los datos se guardan solo en este navegador mientras tanto.', 'info');
       }
+      return;
     }
     capReady = true;
     render();
