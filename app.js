@@ -41,6 +41,7 @@
   var loginRole = ENTRY_MODE;
   var loginError = '';
   var adminTab = 'solicitudes';
+  var adminAccountState = { busy:false, done:false, error:'' };
   var reportFilter = { from: null, to: null, cliente: 'todos', estado: 'todos', tipo: 'todos', proyecto: 'todos', quick: 'mes' };
   var reportPicker = { open: false, step: 'from', cursor: null };
   var solFilter = { cliente: 'todos', estado: 'todos', proyecto: 'todos' };
@@ -175,7 +176,7 @@
     return u;
   }
   function setCurrentUser(u){ sessionStorage.setItem('moventi_uid', u ? u.id : ''); }
-  function logout(){ sessionStorage.removeItem('moventi_uid'); render(); }
+  function logout(){ sessionStorage.removeItem('moventi_uid'); adminAccountState = { busy:false, done:false, error:'' }; render(); }
 
   /* ================= persistence ================= */
   function showToast(msg, kind){
@@ -687,7 +688,8 @@
       ['solicitudes','Solicitudes'],
       ['tipos','Tipos de licencia'],
       ['clientes','Clientes'],
-      ['reporte','Reporte']
+      ['reporte','Reporte'],
+      ['cuenta','Mi cuenta']
     ];
     return '<div class="side-nav">' + items.map(function(it){
       return '<div class="nav-item '+(adminTab===it[0]?'active':'')+'" onclick="App.setAdminTab(\''+it[0]+'\')"><span class="ic">•</span><span class="nav-label">'+it[1]+'</span></div>';
@@ -1128,11 +1130,35 @@
     '</div>';
   }
 
+  function renderAdminCuenta(user){
+    var errMsg = {
+      invalid_input: 'Completa todos los campos. La nueva contraseña debe tener al menos 8 caracteres y coincidir en ambos campos.',
+      invalid_current_password: 'La contraseña actual no es correcta.',
+      server_error: 'Ocurrió un error al guardar. Intenta nuevamente.'
+    };
+    return '<div class="card" style="max-width:480px">' +
+      '<h3 style="margin-top:0">Cambiar mi contraseña</h3>' +
+      '<p style="color:var(--ink-subtle)">Cambia la contraseña de la cuenta de administrador ('+esc(user.username)+') sin salir del panel ni depender del correo de recuperación.</p>' +
+      (adminAccountState.done ?
+        '<div class="notice-box">' + noticeIconSvg() + '<span>Contraseña actualizada correctamente.</span></div>' +
+        '<div style="margin-top:.75rem"><button type="button" class="btn btn-ghost btn-sm" onclick="App.resetChangeAdminPasswordForm()">Cambiarla de nuevo</button></div>' :
+        '<form onsubmit="App.submitChangeAdminPassword(event)">' +
+          '<div class="field"><label>Contraseña actual</label><input type="password" name="currentPassword" autocomplete="current-password" required /></div>' +
+          '<div class="field"><label>Nueva contraseña</label><input type="password" name="newPassword" autocomplete="new-password" minlength="8" required /></div>' +
+          '<div class="field"><label>Confirmar nueva contraseña</label><input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" required /></div>' +
+          (adminAccountState.error ? '<div class="login-error">'+esc(errMsg[adminAccountState.error]||'Ocurrió un error.')+'</div>' : '') +
+          '<button type="submit" class="btn btn-primary" '+(adminAccountState.busy?'disabled':'')+' style="margin-top:.5rem">'+(adminAccountState.busy?'Guardando…':'Guardar nueva contraseña')+'</button>' +
+        '</form>'
+      ) +
+    '</div>';
+  }
+
   function renderAdmin(user){
     var body;
     if(adminTab==='solicitudes') body = renderAdminSolicitudes();
     else if(adminTab==='tipos') body = renderAdminTipos();
     else if(adminTab==='clientes') body = renderAdminClientes();
+    else if(adminTab==='cuenta') body = renderAdminCuenta(user);
     else body = renderAdminReporte();
 
     return topbar(user, 'Administrador') +
@@ -1248,6 +1274,42 @@
       render();
     },
     setAdminTab: function(t){ adminTab = t; saveUiState(); render(); },
+
+    resetChangeAdminPasswordForm: function(){
+      adminAccountState = { busy:false, done:false, error:'' };
+      render();
+    },
+    submitChangeAdminPassword: async function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var user = currentUser();
+      var currentPassword = f.currentPassword.value;
+      var newPassword = f.newPassword.value;
+      var confirmPassword = f.confirmPassword.value;
+      if(!user || !currentPassword || !newPassword || newPassword.length<8 || newPassword!==confirmPassword){
+        adminAccountState = { busy:false, done:false, error:'invalid_input' };
+        render();
+        return;
+      }
+      adminAccountState = { busy:true, done:false, error:'' };
+      render();
+      try{
+        var resp = await fetch('/api/change-admin-password', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
+          body: JSON.stringify({ username: user.username, currentPassword: currentPassword, newPassword: newPassword })
+        });
+        var data = await resp.json().catch(function(){ return {}; });
+        if(resp.ok && data.ok){
+          adminAccountState = { busy:false, done:true, error:'' };
+        } else {
+          adminAccountState = { busy:false, done:false, error: data.error || 'server_error' };
+        }
+      }catch(e){
+        adminAccountState = { busy:false, done:false, error:'server_error' };
+      }
+      render();
+    },
 
     submitRequest: function(ev){
       ev.preventDefault();
