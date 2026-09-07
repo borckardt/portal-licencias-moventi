@@ -34,6 +34,7 @@ portal-licencias-vercel/
 - Cambios de estilos: edita `styles.css`.
 - Cambios que solo apliquen a una de las dos entradas (p. ej. el texto del encabezado): busca `ENTRY_MODE` dentro de `app.js` — ahí se ramifica lo que es distinto entre cliente y administrador.
 - No dupliques `app.js` ni `styles.css` entre `index.html` y `admin.html`: ambas páginas cargan los mismos archivos.
+- **Proyectos/servicios del cliente** (Ligo-Prod, LigoCloudPlatform, Ligo-Dev): la lista vive en la constante `PROJECT_OPTIONS` al inicio de `app.js`. Para agregar, quitar o renombrar un proyecto, edita esa constante — se actualiza automáticamente el selector del formulario de solicitud del cliente, las columnas/filtros "Proyecto" en los paneles de administrador (Solicitudes y Reporte), el desglose por proyecto del Reporte, el CSV exportado y los correos de notificación.
 
 ## Seguridad
 
@@ -41,7 +42,8 @@ portal-licencias-vercel/
 - **Cabeceras HTTP** (`vercel.json`): `X-Robots-Tag: noindex` (no indexable por buscadores/bots), `Content-Security-Policy`, `X-Frame-Options: DENY` (anti-clickjacking), `Strict-Transport-Security`, `Referrer-Policy`, `Permissions-Policy`.
 - **`robots.txt`**: bloquea el rastreo de todo el sitio por bots de buscadores.
 - **`PORTAL_API_TOKEN`**: token compartido que el frontend manda en cada llamada a `/api/*`, para que esos endpoints no sean un relay abierto para bots/scripts automatizados (ver `SETUP_GMAIL.md`).
-- **Datos**: el estado de la app (clientes, solicitudes, tipos de licencia) vive en Vercel Blob (`app-state.json`), no en el HTML ni en `localStorage` — todos los navegadores/dispositivos ven los mismos datos. La contraseña del administrador vive hasheada (salt + SHA-256) en un blob separado (`admin-auth-*.json`); las contraseñas de clientes están en texto plano dentro de ese mismo estado (aceptable para este uso interno de bajo riesgo, no para datos sensibles).
+- **Datos**: el estado de la app (clientes, solicitudes, tipos de licencia) vive en Vercel Blob (`app-state.json`), no en el HTML ni en `localStorage` — todos los navegadores/dispositivos ven los mismos datos. La contraseña del administrador vive hasheada (salt + SHA-256) en un blob separado (`admin-auth-*.json`).
+- **Contraseñas de clientes hasheadas**: ninguna contraseña de cliente se guarda ni se muestra en texto plano. `app.js` calcula el hash en el navegador con la Web Crypto API nativa (`crypto.subtle.digest('SHA-256', ...)`, sin librerías externas, compatible con la Content-Security-Policy del sitio) usando el mismo formato `salt:hashHex` que ya usaba la cuenta del administrador. El campo guardado en el estado es `passwordHash`, nunca `password`. Al crear un cliente o cambiarle la contraseña desde el panel de administrador, el campo de contraseña siempre se muestra vacío (nunca precargado con el valor real) y solo se envía el hash. Las cuentas antiguas que aún tuvieran `password` en texto plano se migran automáticamente a `passwordHash` la primera vez que el estado se carga o que el usuario inicia sesión — no requiere ninguna acción manual. Con esto, inspeccionar la página (clic derecho → Inspeccionar) ya no expone ninguna contraseña de cliente ni de administrador.
 
 ## Desplegar cambios
 

@@ -16,6 +16,12 @@
   var NEW_REQUEST_NOTIFY_EMAILS = ['sborckardt@moventiglobal.com', 'administracion@moventiglobal.com'];
   var DEFAULT_EMAIL_SUBJECT = 'Solicitud de habilitación de licencias — Moventi ({{cantidad}} {{unidad}})';
   var DEFAULT_EMAIL_BODY = 'Hola,\n\nSe solicita generar/habilitar las siguientes licencias aprobadas:\n\n{{detalle}}\n\nSaludos,\n{{admin}}';
+  // Proyectos/servicios del cliente a los que puede vincularse la cuenta que
+  // se está solicitando. Por ahora es una lista fija compartida por todos los
+  // clientes del portal; si más adelante cada cliente necesita su propia
+  // lista, esto puede moverse a STATE (como los tipos de licencia) y
+  // administrarse desde el panel.
+  var PROJECT_OPTIONS = ['Ligo-Prod', 'LigoCloudPlatform', 'Ligo-Dev'];
 
   var STATE = JSON.parse(document.getElementById('app-state').textContent);
   if(!STATE.settings) STATE.settings = { ingramEmail: '' };
@@ -35,15 +41,14 @@
   var loginRole = ENTRY_MODE;
   var loginError = '';
   var adminTab = 'solicitudes';
-  var reportFilter = { from: null, to: null, cliente: 'todos', estado: 'todos', tipo: 'todos', quick: 'mes' };
+  var reportFilter = { from: null, to: null, cliente: 'todos', estado: 'todos', tipo: 'todos', proyecto: 'todos', quick: 'mes' };
   var reportPicker = { open: false, step: 'from', cursor: null };
-  var solFilter = { cliente: 'todos', estado: 'todos' };
+  var solFilter = { cliente: 'todos', estado: 'todos', proyecto: 'todos' };
   var selectedForIngram = new Set();
   var editingRequestId = null;
   var editingClientId = null;
   var openRowMenu = null;
   var rowMenuPos = null;
-  var visibleClientPasswords = {};
   var currentTheme = 'light';
   var forgotPasswordOpen = false;
   var forgotPasswordSent = false;
@@ -131,6 +136,7 @@
     var text = 'Se registró una nueva solicitud de licencia:\n\n' +
       '- Cliente: ' + r.clientName + '\n' +
       '- Tipo: ' + r.licenseTypeName + '\n' +
+      '- Proyecto: ' + (r.project||'—') + '\n' +
       '- Cantidad: ' + (r.quantity||1) + '\n' +
       '- Necesaria desde: ' + fmtDateShort(r.neededFrom) + '\n' +
       (r.note ? ('- Nota del cliente: ' + r.note + '\n') : '') +
@@ -138,9 +144,10 @@
     var html = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
       '<p>Se registró una nueva solicitud de licencia:</p>' +
       '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
-      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Necesaria desde</th></tr>' +
+      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Necesaria desde</th></tr>' +
       '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.project||'—')+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center">'+(r.quantity||1)+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+fmtDateShort(r.neededFrom)+'</td></tr>' +
       '</table>' +
@@ -209,6 +216,59 @@
 
   function portalApiHeaders(extra){
     return Object.assign({}, extra||{}, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {});
+  }
+
+  /* ================= password hashing (cliente) =================
+     Antes las contraseñas de los clientes se guardaban en texto plano
+     dentro de STATE (visible para cualquiera con las herramientas de
+     desarrollador — clic derecho → Inspeccionar — y en el propio HTML de la
+     página). Ahora se guardan como hash salteado (misma técnica que ya usa
+     el backend para la cuenta de administrador, ver lib/adminAuth.js:
+     SHA-256 de "salt:contraseña", guardado como "salt:hashHex"), usando la
+     Web Crypto API nativa del navegador — no depende de ninguna librería
+     externa, así que no choca con la Content-Security-Policy del sitio. */
+  function randomHex(byteLen){
+    var arr = new Uint8Array(byteLen);
+    (window.crypto || window.msCrypto).getRandomValues(arr);
+    return Array.prototype.map.call(arr, function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  }
+  async function sha256Hex(str){
+    var data = new TextEncoder().encode(str);
+    var digestBuf = await crypto.subtle.digest('SHA-256', data);
+    return Array.prototype.map.call(new Uint8Array(digestBuf), function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  }
+  async function hashPassword(password, salt){
+    salt = salt || randomHex(16);
+    var digest = await sha256Hex(salt + ':' + password);
+    return salt + ':' + digest;
+  }
+  async function verifyPassword(password, stored){
+    if(!stored || stored.indexOf(':')===-1) return false;
+    var salt = stored.split(':')[0];
+    var computed = await hashPassword(password, salt);
+    return computed === stored;
+  }
+  // Migra cuentas de cliente que todavía tengan `password` en texto plano
+  // (datos guardados antes de este cambio) a `passwordHash`, en segundo
+  // plano y sin bloquear el render. No usa persistState() (que siempre
+  // vuelve a pintar la pantalla) para no borrar algo que la persona esté
+  // escribiendo justo en ese momento en el login.
+  async function migrateLegacyClientPasswords(){
+    var changed = false;
+    for(var i=0;i<STATE.users.length;i++){
+      var u = STATE.users[i];
+      if(u && u.password!=null && !u.passwordHash){
+        u.passwordHash = await hashPassword(u.password);
+        delete u.password;
+        changed = true;
+      }
+    }
+    if(!changed) return;
+    saveLocalFallbackState();
+    try{
+      await saveRemoteState(STATE);
+      baseRemoteState = JSON.parse(JSON.stringify(STATE));
+    }catch(e){ console.error(e); }
   }
 
   // Trae el estado compartido guardado en el backend (Vercel Blob).
@@ -425,9 +485,23 @@
       }
       // verified === null: no había backend disponible, seguimos abajo con la validación local.
     }
-    var u = STATE.users.find(function(x){ return x.username===username && x.password===password && x.role===loginRole; });
-    if(!u){ loginError = 'Usuario o contraseña incorrectos para el perfil seleccionado.'; render(); return; }
+    var u = STATE.users.find(function(x){ return x.username===username && x.role===loginRole; });
+    var ok = false;
+    if(u && u.passwordHash) ok = await verifyPassword(password, u.passwordHash);
+    else if(u && u.password!=null) ok = (u.password===password); // cuenta aún no migrada al hash
+    if(!u || !ok){ loginError = 'Usuario o contraseña incorrectos para el perfil seleccionado.'; render(); return; }
     if(!u.active){ loginError = 'Esta cuenta está bloqueada. Contacta al administrador.'; render(); return; }
+    // Si la cuenta todavía tenía la contraseña en texto plano, aprovechamos
+    // este login exitoso para migrarla al hash de una vez (sin esperar a
+    // que el administrador abra la pestaña de Clientes).
+    if(!u.passwordHash && u.password!=null){
+      hashPassword(password).then(function(h){
+        u.passwordHash = h;
+        delete u.password;
+        saveLocalFallbackState();
+        saveRemoteState(STATE).then(function(){ baseRemoteState = JSON.parse(JSON.stringify(STATE)); }).catch(function(e){ console.error(e); });
+      });
+    }
     loginError = '';
     setCurrentUser(u);
     adminTab = 'solicitudes';
@@ -557,6 +631,7 @@
     var rows = myReqs.map(function(r){
       return '<tr>' +
         '<td>'+esc(r.licenseTypeName)+'</td>' +
+        '<td style="color:var(--ink-subtle)">'+esc(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
@@ -570,6 +645,7 @@
     var options = activeTypes.map(function(t){
       return '<option value="'+t.id+'">'+esc(t.name)+' — '+money(t.price)+'</option>';
     }).join('');
+    var projectOptions = PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'">'+esc(p)+'</option>'; }).join('');
 
     return topbar(user, 'Cliente') +
     '<div class="app-body">' +
@@ -586,6 +662,7 @@
                   '<div class="field"><label>Cantidad de licencias</label><div class="num-field"><input type="number" id="new-qty-input" name="quantity" min="1" step="1" value="1" required />'+numStepper('new-qty-input',1)+'</div></div>' +
                 '</div>' +
                 '<div class="field-row">' +
+                  '<div class="field"><label>Proyecto/servicio al que se vincula la cuenta</label><select name="project" required>'+projectOptions+'</select></div>' +
                   '<div class="field"><label>¿Desde cuándo se necesita habilitada?</label><input type="date" name="neededFrom" min="'+todayYmd()+'" required /></div>' +
                 '</div>' +
                 '<div class="field"><label>Comentario (opcional)</label><textarea name="note" placeholder="Detalle adicional para el administrador"></textarea></div>' +
@@ -597,7 +674,7 @@
           '<div class="card card-pad">' +
             '<div class="card-title">Mis solicitudes<span style="font-weight:500;color:var(--ink-muted);font-size:.8rem">'+myReqs.length+' registradas</span></div>' +
             (myReqs.length===0 ? '<div class="table-empty">Aún no registras solicitudes.</div>' :
-            '<div class="table-wrap"><table><thead><tr><th>Tipo</th><th>Cantidad</th><th>Necesaria desde</th><th>Fecha solicitada</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Comentario</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+            '<div class="table-wrap"><table><thead><tr><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Necesaria desde</th><th>Fecha solicitada</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Comentario</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -651,6 +728,7 @@
     var list = STATE.requests.slice().sort(function(a,b){ return new Date(b.requestedAt)-new Date(a.requestedAt); });
     if(solFilter.cliente!=='todos') list = list.filter(function(r){ return r.clientUsername===solFilter.cliente; });
     if(solFilter.estado!=='todos') list = list.filter(function(r){ return r.status===solFilter.estado; });
+    if(solFilter.proyecto!=='todos') list = list.filter(function(r){ return r.project===solFilter.proyecto; });
 
     var pendingIngram = STATE.requests.filter(function(r){ return r.status==='aprobado' && !r.notifiedToIngram; });
 
@@ -660,11 +738,13 @@
 
       if(isEditing){
         var typeOptions = allTypes.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
+        var projectOptionsEdit = PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(p===r.project?'selected':'')+'>'+esc(p)+'</option>'; }).join('');
         return '<tr class="editing-row">' +
           '<td></td>' +
           '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
           '<td class="wrap">'+esc(r.clientName)+'</td>' +
           '<td class="wrap"><select class="mini-select" id="edit-type-'+r.id+'">'+typeOptions+'</select></td>' +
+          '<td class="wrap"><select class="mini-select" id="edit-project-'+r.id+'">'+projectOptionsEdit+'</select></td>' +
           '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
           '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
           '<td class="num">'+money(reqTotal(r))+'</td>' +
@@ -697,6 +777,7 @@
         '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
         '<td class="wrap">'+esc(r.clientName)+'</td>' +
         '<td class="wrap">'+esc(r.licenseTypeName)+'</td>' +
+        '<td class="wrap">'+esc(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td class="num">'+money(reqTotal(r))+'</td>' +
@@ -732,10 +813,13 @@
       '<div class="field"><label>Estado</label><select onchange="App.setSolFilter(\'estado\', this.value)">' +
         ['todos','pendiente','aprobado','rechazado'].map(function(s){ return '<option value="'+s+'" '+(solFilter.estado===s?'selected':'')+'>'+(s==='todos'?'Todos':s)+'</option>'; }).join('') +
       '</select></div>' +
+      '<div class="field"><label>Proyecto</label><select onchange="App.setSolFilter(\'proyecto\', this.value)">' +
+        '<option value="todos">Todos</option>' + PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(solFilter.proyecto===p?'selected':'')+'>'+esc(p)+'</option>'; }).join('') +
+      '</select></div>' +
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes con estos filtros.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Cantidad</th><th>Necesaria desde</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Necesaria desde</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -781,7 +865,11 @@
         return '<tr class="editing-row">' +
           '<td><input class="mini-input" id="edit-client-name-'+u.id+'" value="'+esc(u.name)+'" /></td>' +
           '<td><input class="mini-input mono" id="edit-client-username-'+u.id+'" value="'+esc(u.username)+'" /></td>' +
-          '<td colspan="3"><input class="mini-input mono" id="edit-client-password-'+u.id+'" value="'+esc(u.password)+'" placeholder="Contraseña" /></td>' +
+          // El campo de contraseña arranca SIEMPRE vacío: la contraseña
+          // actual no se guarda en texto plano en ningún lado (solo su
+          // hash), así que no hay nada que precargar aquí. Si se deja
+          // vacío al guardar, la contraseña no cambia.
+          '<td colspan="2"><input class="mini-input mono" type="password" autocomplete="new-password" id="edit-client-password-'+u.id+'" value="" placeholder="Nueva contraseña (opcional)" /></td>' +
           '<td>' +
             '<button class="btn btn-primary btn-sm" onclick="App.saveEditClient(\''+u.id+'\')">Guardar</button> ' +
             '<button class="btn btn-ghost btn-sm" onclick="App.cancelEditClient()">Cancelar</button>' +
@@ -789,14 +877,10 @@
         '</tr>';
       }
 
-      var pwVisible = !!visibleClientPasswords[u.id];
-      var pwCell = '<span class="mono">'+(pwVisible ? esc(u.password) : '••••••••')+'</span> ' +
-        '<button type="button" class="btn btn-ghost btn-sm" onclick="App.toggleClientPasswordVisible(\''+u.id+'\')">'+(pwVisible?'Ocultar':'Ver')+'</button>';
-
       return '<tr>' +
         '<td class="lt-name">'+esc(u.name)+'</td>' +
         '<td class="mono">'+esc(u.username)+'</td>' +
-        '<td>'+pwCell+'</td>' +
+        '<td><span class="mono" style="color:var(--ink-subtle)">••••••••</span></td>' +
         '<td><span class="pill status-'+(u.active?'activo':'bloqueado')+'">'+(u.active?'activo':'bloqueado')+'</span></td>' +
         '<td style="color:var(--ink-subtle)">'+reqCount+' solicitud'+(reqCount===1?'':'es')+'</td>' +
         '<td>' +
@@ -814,7 +898,8 @@
         '<form onsubmit="App.addClient(event)" class="stack">' +
           '<div class="field"><label>Nombre / empresa</label><input name="name" placeholder="Ej. Beta Consultores S.A.C." required /></div>' +
           '<div class="field"><label>Usuario</label><input name="username" placeholder="usuario de acceso" required /></div>' +
-          '<div class="field"><label>Contraseña</label><input name="password" placeholder="contraseña inicial" required /></div>' +
+          '<div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="new-password" placeholder="contraseña inicial" required /></div>' +
+          '<p class="hint">La contraseña se guarda encriptada (hash); ni el administrador ni nadie con las herramientas de desarrollador puede volver a verla en texto plano — solo se puede definir una nueva.</p>' +
           '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Crear cuenta</button>' +
         '</form>' +
       '</div>' +
@@ -929,6 +1014,7 @@
       if(reportFilter.cliente!=='todos' && r.clientUsername!==reportFilter.cliente) return false;
       if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
       if(reportFilter.tipo!=='todos' && r.licenseTypeId!==reportFilter.tipo) return false;
+      if(reportFilter.proyecto!=='todos' && r.project!==reportFilter.proyecto) return false;
       return true;
     }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
 
@@ -937,14 +1023,31 @@
     var montoAprobado = aprobadas.reduce(function(s,r){ return s + reqTotal(r); }, 0);
     var totalLicencias = list.reduce(function(s,r){ return s + Number(r.quantity||1); }, 0);
 
+    // Desglose por proyecto/servicio (Ligo-Prod / LigoCloudPlatform /
+    // Ligo-Dev): a qué proyecto quedaron vinculadas las cuentas solicitadas
+    // en el periodo/filtros actuales.
+    var projectBreakdown = PROJECT_OPTIONS.map(function(p){
+      var reqsP = list.filter(function(r){ return r.project===p; });
+      var aprobadasP = reqsP.filter(function(r){ return r.status==='aprobado'; });
+      return {
+        project: p,
+        count: reqsP.length,
+        aprobadas: aprobadasP.length,
+        monto: aprobadasP.reduce(function(s,r){ return s + reqTotal(r); }, 0)
+      };
+    });
+    var sinProyectoCount = list.filter(function(r){ return !r.project; }).length;
+
     var allTypesReporte = STATE.licenseTypes;
     var rows = list.map(function(r){
       if(editingRequestId===r.id){
         var typeOptionsR = allTypesReporte.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
+        var projectOptionsR = PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(p===r.project?'selected':'')+'>'+esc(p)+'</option>'; }).join('');
         return '<tr class="editing-row">' +
           '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
           '<td class="wrap">'+esc(r.clientName)+'</td>' +
           '<td class="wrap"><select class="mini-select" id="edit-type-'+r.id+'">'+typeOptionsR+'</select></td>' +
+          '<td class="wrap"><select class="mini-select" id="edit-project-'+r.id+'">'+projectOptionsR+'</select></td>' +
           '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
           '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
           '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
@@ -958,6 +1061,7 @@
         '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
         '<td class="wrap">'+esc(r.clientName)+'</td>' +
         '<td class="wrap">'+esc(r.licenseTypeName)+'</td>' +
+        '<td class="wrap">'+esc(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
@@ -993,6 +1097,9 @@
       '<div class="field"><label>Tipo de licencia</label><select onchange="App.setReportFilter(\'tipo\', this.value)">' +
         '<option value="todos">Todos</option>' + STATE.licenseTypes.map(function(t){ return '<option value="'+t.id+'" '+(reportFilter.tipo===t.id?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('') +
       '</select></div>' +
+      '<div class="field"><label>Proyecto</label><select onchange="App.setReportFilter(\'proyecto\', this.value)">' +
+        '<option value="todos">Todos</option>' + PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(reportFilter.proyecto===p?'selected':'')+'>'+esc(p)+'</option>'; }).join('') +
+      '</select></div>' +
       '<button class="btn btn-primary" style="margin-left:auto" onclick="App.exportReport()">Descargar reporte (CSV)</button>' +
     '</div>' +
     '<div class="stat-row" style="margin-bottom:1.2rem">' +
@@ -1001,9 +1108,23 @@
       '<div class="stat-tile"><div class="label">Monto aprobado</div><div class="value accent">'+money(montoAprobado)+'</div></div>' +
       '<div class="stat-tile"><div class="label">Licencias solicitadas</div><div class="value">'+totalLicencias+'</div></div>' +
     '</div>' +
+    '<div class="card" style="margin-bottom:1.2rem">' +
+      '<div class="card-title" style="padding:.9rem 1rem 0">Desglose por proyecto</div>' +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Proyecto</th><th>Solicitudes</th><th>Aprobadas</th><th>Monto aprobado</th></tr></thead><tbody>' +
+        projectBreakdown.map(function(pb){
+          return '<tr>' +
+            '<td class="wrap">'+esc(pb.project)+'</td>' +
+            '<td class="num">'+pb.count+'</td>' +
+            '<td class="num">'+pb.aprobadas+'</td>' +
+            '<td class="num">'+money(pb.monto)+'</td>' +
+          '</tr>';
+        }).join('') +
+        (sinProyectoCount>0 ? '<tr><td class="wrap" style="color:var(--ink-subtle)">Sin proyecto (solicitudes previas a este cambio)</td><td class="num">'+sinProyectoCount+'</td><td class="num">—</td><td class="num">—</td></tr>' : '') +
+      '</tbody></table></div>' +
+    '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Cantidad</th><th>Necesaria desde</th><th>Estado</th><th>Precio</th><th>Fecha autorizada</th><th>Revisado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Necesaria desde</th><th>Estado</th><th>Precio</th><th>Fecha autorizada</th><th>Revisado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -1141,6 +1262,7 @@
         clientName: user.name,
         licenseTypeId: typeId,
         licenseTypeName: type ? type.name : '—',
+        project: f.project.value,
         price: type ? type.price : 0,
         quantity: qty,
         neededFrom: f.neededFrom.value,
@@ -1170,6 +1292,7 @@
       var typeEl = document.getElementById('edit-type-'+id);
       var qtyEl = document.getElementById('edit-qty-'+id);
       var dateEl = document.getElementById('edit-date-'+id);
+      var projectEl = document.getElementById('edit-project-'+id); // solo existe en la tabla de Solicitudes
       var qty = Math.max(1, parseInt(qtyEl.value, 10) || 1);
       var neededFrom = dateEl.value;
       if(!neededFrom){ showToast('Indica la fecha en que se necesita la licencia.', 'error'); return; }
@@ -1182,6 +1305,7 @@
         r.quantity = qty;
         r.neededFrom = neededFrom;
         if(type){ r.licenseTypeId = type.id; r.licenseTypeName = type.name; r.price = type.price; }
+        if(projectEl) r.project = projectEl.value;
       });
       showToast('Solicitud actualizada.', 'success');
     },
@@ -1248,16 +1372,17 @@
 
       var admin = currentUser();
       var detalle = items.map(function(r){
-        return '- ' + r.licenseTypeName + ' | Cantidad: ' + (r.quantity||1) + ' | Cliente: ' + r.clientName + ' | Habilitar desde: ' + fmtDateShort(r.neededFrom);
+        return '- ' + r.licenseTypeName + ' | Proyecto: ' + (r.project||'—') + ' | Cantidad: ' + (r.quantity||1) + ' | Cliente: ' + r.clientName + ' | Habilitar desde: ' + fmtDateShort(r.neededFrom);
       }).join('\n');
       var htmlRows = items.map(function(r){
         return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
+          '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.project||'—')+'</td>' +
           '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center">'+(r.quantity||1)+'</td>' +
           '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
           '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+fmtDateShort(r.neededFrom)+'</td></tr>';
       }).join('');
       var detalleHtml = '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
-        '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Habilitar desde</th></tr>' +
+        '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Habilitar desde</th></tr>' +
         htmlRows + '</table>';
       var tplVars = {
         cantidad: items.length,
@@ -1370,28 +1495,20 @@
       showToast('Tipo de licencia eliminado.', 'success');
     },
 
-    addClient: function(ev){
+    addClient: async function(ev){
       ev.preventDefault();
       var f = ev.target;
       var username = f.username.value.trim();
+      var passwordValue = f.password.value;
       if(STATE.users.some(function(u){ return u.username===username; })){ showToast('Ese usuario ya existe.', 'error'); return; }
+      var hash = await hashPassword(passwordValue);
       commit(function(s){
-        s.users.push({ id: uid('u'), username: username, password: f.password.value, role: 'client', name: f.name.value.trim(), active: true });
+        s.users.push({ id: uid('u'), username: username, passwordHash: hash, role: 'client', name: f.name.value.trim(), active: true });
       });
       showToast('Cuenta de cliente creada.', 'success');
     },
     toggleUserActive: function(id){
       commit(function(s){ var u = s.users.find(function(x){return x.id===id;}); if(u) u.active = !u.active; });
-    },
-    resetPassword: function(id){
-      var pass = prompt('Nueva contraseña para esta cuenta:');
-      if(!pass) return;
-      commit(function(s){ var u = s.users.find(function(x){return x.id===id;}); if(u) u.password = pass; });
-      showToast('Contraseña actualizada.', 'success');
-    },
-    toggleClientPasswordVisible: function(id){
-      visibleClientPasswords[id] = !visibleClientPasswords[id];
-      render();
     },
     startEditClient: function(id){
       editingClientId = id;
@@ -1401,21 +1518,23 @@
       editingClientId = null;
       render();
     },
-    saveEditClient: function(id){
+    saveEditClient: async function(id){
       var nameEl = document.getElementById('edit-client-name-'+id);
       var usernameEl = document.getElementById('edit-client-username-'+id);
       var passwordEl = document.getElementById('edit-client-password-'+id);
       var name = (nameEl.value||'').trim();
       var username = (usernameEl.value||'').trim();
-      var password = passwordEl.value;
-      if(!name || !username || !password){ showToast('Completa nombre, usuario y contraseña.', 'error'); return; }
+      var newPassword = passwordEl.value; // vacío = no cambiar la contraseña
+      if(!name || !username){ showToast('Completa nombre y usuario.', 'error'); return; }
       var clash = STATE.users.some(function(u){ return u.id!==id && u.username===username; });
       if(clash){ showToast('Ese usuario ya existe.', 'error'); return; }
+      var newHash = newPassword ? await hashPassword(newPassword) : null;
       commit(function(s){
         var u = s.users.find(function(x){ return x.id===id; });
         if(!u) return;
         var oldUsername = u.username;
-        u.name = name; u.username = username; u.password = password;
+        u.name = name; u.username = username;
+        if(newHash){ u.passwordHash = newHash; delete u.password; }
         if(oldUsername!==username){
           s.requests.forEach(function(r){ if(r.clientUsername===oldUsername) r.clientUsername = username; });
         }
@@ -1479,13 +1598,14 @@
         if(reportFilter.cliente!=='todos' && r.clientUsername!==reportFilter.cliente) return false;
         if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
         if(reportFilter.tipo!=='todos' && r.licenseTypeId!==reportFilter.tipo) return false;
+        if(reportFilter.proyecto!=='todos' && r.project!==reportFilter.proyecto) return false;
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
       function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha solicitada','Cliente','Tipo de licencia','Cantidad','Necesaria desde','Estado','Precio total (US$)','Fecha autorizada','Revisado por'];
+      var header = ['Fecha solicitada','Cliente','Tipo de licencia','Proyecto','Cantidad','Necesaria desde','Estado','Precio total (US$)','Fecha autorizada','Revisado por'];
       var lines = [header.join(';')];
       list.forEach(function(r){
-        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.reviewedAt?dateOnly(r.reviewedAt):'', r.reviewedBy||''].map(csvField).join(';'));
+        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.reviewedAt?dateOnly(r.reviewedAt):'', r.reviewedBy||''].map(csvField).join(';'));
       });
       var totalAprobado = list.filter(function(r){return r.status==='aprobado';}).reduce(function(s,r){return s+reqTotal(r);},0);
       lines.push('');
@@ -1529,6 +1649,10 @@
           STATE = remoteRes.state;
           baseRemoteState = JSON.parse(JSON.stringify(STATE));
           saveLocalFallbackState();
+          // En segundo plano, sin bloquear ni volver a pintar: si alguna
+          // cuenta de cliente quedó con la contraseña en texto plano de
+          // antes de este cambio, la migra a hash.
+          migrateLegacyClientPasswords();
         } else {
           // El backend aún no tiene nada guardado (primera vez): lo
           // inicializamos con el estado semilla/actual de este navegador.
