@@ -1,10 +1,11 @@
-// Permite al administrador, ya con sesión iniciada, cambiar su propia
-// contraseña desde el panel de administración sin pasar por el flujo de
-// correo de "olvidé mi contraseña". Requiere la contraseña actual correcta
-// (no un token de reseteo) como comprobación de que quien pide el cambio es
-// realmente quien ya tiene la sesión abierta.
+// Permite al administrador, ya con sesión iniciada en el panel, cambiar su
+// propia contraseña sin pasar por el flujo de correo de "olvidé mi
+// contraseña" y sin tener que reingresar la contraseña actual — a pedido
+// del usuario, solo se pide la nueva contraseña y su confirmación. La
+// comprobación de identidad la da el hecho de que solo alguien ya logueado
+// en el panel de administrador ve este formulario.
 
-const { getOrCreateAuth, saveAuth, hashPassword, verifyPassword } = require('../lib/adminAuth');
+const { getOrCreateAuth, saveAuth, hashPassword } = require('../lib/adminAuth');
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -21,17 +22,16 @@ module.exports = async function handler(req, res) {
 
   var body = req.body || {};
   var username = (body.username || '').trim();
-  var currentPassword = body.currentPassword || '';
   var newPassword = body.newPassword || '';
 
-  if (!username || !currentPassword || !newPassword || newPassword.length < 8) {
+  if (!username || !newPassword || newPassword.length < 8) {
     res.status(400).json({ ok: false, error: 'invalid_input' });
     return;
   }
 
   try {
     var auth = await getOrCreateAuth();
-    if (username !== auth.username || !verifyPassword(currentPassword, auth.passwordHash)) {
+    if (username !== auth.username) {
       res.status(401).json({ ok: false, error: 'invalid_current_password' });
       return;
     }
