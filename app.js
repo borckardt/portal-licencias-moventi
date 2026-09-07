@@ -1143,7 +1143,6 @@
         '<div class="notice-box">' + noticeIconSvg() + '<span>Contraseña actualizada correctamente.</span></div>' +
         '<div style="margin-top:.75rem"><button type="button" class="btn btn-ghost btn-sm" onclick="App.resetChangeAdminPasswordForm()">Cambiarla de nuevo</button></div>' :
         '<form onsubmit="App.submitChangeAdminPassword(event)">' +
-          '<div class="field"><label>Contraseña actual</label><input type="password" name="currentPassword" autocomplete="current-password" required /></div>' +
           '<div class="field"><label>Nueva contraseña</label><input type="password" name="newPassword" autocomplete="new-password" minlength="8" required /></div>' +
           '<div class="field"><label>Confirmar nueva contraseña</label><input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" required /></div>' +
           (adminAccountState.error ? '<div class="login-error">'+esc(errMsg[adminAccountState.error]||'Ocurrió un error.')+'</div>' : '') +
@@ -1283,10 +1282,9 @@
       ev.preventDefault();
       var f = ev.target;
       var user = currentUser();
-      var currentPassword = f.currentPassword.value;
       var newPassword = f.newPassword.value;
       var confirmPassword = f.confirmPassword.value;
-      if(!user || !currentPassword || !newPassword || newPassword.length<8 || newPassword!==confirmPassword){
+      if(!user || !newPassword || newPassword.length<8 || newPassword!==confirmPassword){
         adminAccountState = { busy:false, done:false, error:'invalid_input' };
         render();
         return;
@@ -1297,7 +1295,7 @@
         var resp = await fetch('/api/change-admin-password', {
           method: 'POST',
           headers: Object.assign({ 'Content-Type': 'application/json' }, PORTAL_API_TOKEN ? { 'x-portal-token': PORTAL_API_TOKEN } : {}),
-          body: JSON.stringify({ username: user.username, currentPassword: currentPassword, newPassword: newPassword })
+          body: JSON.stringify({ username: user.username, newPassword: newPassword })
         });
         var data = await resp.json().catch(function(){ return {}; });
         if(resp.ok && data.ok){
