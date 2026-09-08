@@ -57,6 +57,8 @@ Ve al proyecto en Vercel → **Settings → Environment Variables** y agrega:
 | `GMAIL_REFRESH_TOKEN` | El refresh token del paso 2 |
 | `GMAIL_SENDER_EMAIL` | `administracion@moventiglobal.com` |
 | `PORTAL_API_TOKEN` | `FEn_CYyxfOZn8Q1BTXsDMxxJI-1fi9B5` (ya está puesto en el HTML del portal; puedes generar uno distinto si prefieres, pero debe coincidir con el valor de `PORTAL_API_TOKEN` dentro de `index.html`) |
+| `SESSION_SECRET` | **Nueva, obligatoria.** Un valor aleatorio y largo (`openssl rand -base64 48`), distinto de `PORTAL_API_TOKEN`. Firma la cookie de sesión del admin (ver `lib/adminSession.js`) — sin esto, `verify-admin-login` sigue funcionando pero `change-admin-password` y las escrituras de admin en `save-state` quedarán bloqueadas (falla cerrado, no abierto). |
+| `ALLOW_PREVIEW_EMAIL` | Déjala vacía. Solo ponla en `true` si de verdad quieres que un *Preview deployment* de Vercel mande correo real (ver `lib/gmail.js`). |
 
 Después de guardarlas, haz un **Redeploy** del proyecto (Vercel → Deployments → ⋯ → Redeploy)
 para que la función tome las nuevas variables.

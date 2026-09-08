@@ -1,0 +1,28 @@
+name: CI
+
+# Red de seguridad mínima entre "guardar el archivo" y "producción": hoy
+# Vercel despliega automáticamente cada push a main sin que nada lo valide
+# antes. Esto corre en cada push y en cada PR, y falla visiblemente en
+# GitHub (checks ✗) si algo no compila o alguna prueba se rompe — no bloquea
+# el deploy de Vercel por sí solo (para eso hay que activar "required status
+# checks" en la protección de la rama main, ver tareas.md), pero al menos
+# avisa antes de que nadie lo note en producción.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
