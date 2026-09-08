@@ -5,10 +5,8 @@
 const crypto = require('crypto');
 const { getOrCreateAuth, saveAuth, RESET_TOKEN_TTL_MS } = require('../lib/adminAuth');
 const { sendGmail } = require('../lib/gmail');
-
-// A la vez que llega la solicitud de nueva licencia, el enlace de
-// restablecimiento se envía a estas mismas cuentas de recuperación.
-const RECOVERY_EMAILS = ['sborckardt@moventiglobal.com', 'administracion@moventiglobal.com'];
+const { allow, getClientIp } = require('../lib/rateLimit');
+const { INTERNAL_NOTIFY_EMAILS: RECOVERY_EMAILS } = require('../lib/constants');
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -21,6 +19,16 @@ module.exports = async function handler(req, res) {
       res.status(401).json({ ok: false, error: 'unauthorized' });
       return;
     }
+  }
+
+  // Sin esto, alguien podría hacer que el buzón de recuperación reciba
+  // correos sin parar (o probar si el reset dispara algo distinto según el
+  // usuario). 5 solicitudes cada 15 minutos por IP es de sobra para un uso
+  // legítimo (una persona olvidando su contraseña no lo pide 6 veces).
+  var rlKey = 'req-reset:' + getClientIp(req);
+  if (!allow(rlKey, 5, 15 * 60 * 1000)) {
+    res.status(429).json({ ok: false, error: 'too_many_attempts' });
+    return;
   }
 
   var body = req.body || {};

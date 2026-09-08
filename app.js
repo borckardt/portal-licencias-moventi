@@ -176,7 +176,15 @@
     return u;
   }
   function setCurrentUser(u){ sessionStorage.setItem('moventi_uid', u ? u.id : ''); }
-  function logout(){ sessionStorage.removeItem('moventi_uid'); adminAccountState = { busy:false, done:false, error:'' }; render(); }
+  function logout(){
+    sessionStorage.removeItem('moventi_uid');
+    adminAccountState = { busy:false, done:false, error:'' };
+    // Best-effort: borra también la cookie de sesión de admin del lado del
+    // servidor (ver lib/adminSession.js). Si falla (backend no disponible en
+    // este hosting), no bloquea el cierre de sesión local.
+    fetch('/api/admin-logout', { method:'POST', headers: portalApiHeaders() }).catch(function(){});
+    render();
+  }
 
   /* ================= persistence ================= */
   function showToast(msg, kind){
@@ -223,32 +231,70 @@
      Antes las contraseñas de los clientes se guardaban en texto plano
      dentro de STATE (visible para cualquiera con las herramientas de
      desarrollador — clic derecho → Inspeccionar — y en el propio HTML de la
-     página). Ahora se guardan como hash salteado (misma técnica que ya usa
-     el backend para la cuenta de administrador, ver lib/adminAuth.js:
-     SHA-256 de "salt:contraseña", guardado como "salt:hashHex"), usando la
-     Web Crypto API nativa del navegador — no depende de ninguna librería
-     externa, así que no choca con la Content-Security-Policy del sitio. */
+     página). Se guardan como hash usando la Web Crypto API nativa del
+     navegador — no depende de ninguna librería externa, así que no choca
+     con la Content-Security-Policy del sitio.
+
+     Formato nuevo: 'pbkdf2:iteraciones:saltHex:hashHex' (PBKDF2-SHA256, 150k
+     iteraciones — deliberadamente lento, a diferencia de un SHA-256 simple,
+     para que si esta base de datos se filtrara algún día no sea trivial de
+     fuerza-brutear offline). El formato viejo ('saltHex:sha256Hex', un solo
+     SHA-256) se sigue aceptando solo para verificar cuentas que ya
+     estuvieran guardadas así — hashPassword() ya no genera hashes nuevos en
+     ese formato; se migran solas al formato nuevo la próxima vez que esa
+     cuenta inicie sesión (ver el login más abajo), igual que ya se hacía
+     para las que tenían `password` en texto plano. */
+  var PBKDF2_ITERATIONS = 150000;
   function randomHex(byteLen){
     var arr = new Uint8Array(byteLen);
     (window.crypto || window.msCrypto).getRandomValues(arr);
     return Array.prototype.map.call(arr, function(b){ return b.toString(16).padStart(2,'0'); }).join('');
   }
-  async function sha256Hex(str){
-    var data = new TextEncoder().encode(str);
-    var digestBuf = await crypto.subtle.digest('SHA-256', data);
-    return Array.prototype.map.call(new Uint8Array(digestBuf), function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  function hexToBytes(hex){
+    return new Uint8Array((hex.match(/.{2}/g)||[]).map(function(b){ return parseInt(b,16); }));
   }
-  async function hashPassword(password, salt){
+  function bytesToHex(bytes){
+    return Array.prototype.map.call(new Uint8Array(bytes), function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  }
+  async function sha256Hex(str){
+    var digestBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return bytesToHex(digestBuf);
+  }
+  async function pbkdf2Hex(password, saltHex, iterations){
+    var keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), {name:'PBKDF2'}, false, ['deriveBits']);
+    var bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt: hexToBytes(saltHex), iterations: iterations, hash:'SHA-256'}, keyMaterial, 256);
+    return bytesToHex(bits);
+  }
+  async function hashPasswordPbkdf2(password, saltHex){
+    saltHex = saltHex || randomHex(16);
+    var hex = await pbkdf2Hex(password, saltHex, PBKDF2_ITERATIONS);
+    return 'pbkdf2:' + PBKDF2_ITERATIONS + ':' + saltHex + ':' + hex;
+  }
+  async function hashPasswordLegacySha256(password, salt){
     salt = salt || randomHex(16);
     var digest = await sha256Hex(salt + ':' + password);
     return salt + ':' + digest;
   }
-  async function verifyPassword(password, stored){
-    if(!stored || stored.indexOf(':')===-1) return false;
-    var salt = stored.split(':')[0];
-    var computed = await hashPassword(password, salt);
-    return computed === stored;
+  // Punto de entrada usado al crear cuentas o cambiar contraseñas — siempre
+  // produce el formato nuevo (PBKDF2).
+  async function hashPassword(password){
+    return hashPasswordPbkdf2(password);
   }
+  async function verifyPassword(password, stored){
+    if(!stored) return false;
+    if(stored.indexOf('pbkdf2:')===0){
+      var parts = stored.split(':');
+      if(parts.length!==4) return false;
+      var computed = await pbkdf2Hex(password, parts[2], parseInt(parts[1],10));
+      return computed === parts[3];
+    }
+    if(stored.indexOf(':')!==-1){
+      var salt = stored.split(':')[0];
+      return (await hashPasswordLegacySha256(password, salt)) === stored;
+    }
+    return false;
+  }
+  function needsRehash(stored){ return !!stored && stored.indexOf('pbkdf2:')!==0; }
   // Migra cuentas de cliente que todavía tengan `password` en texto plano
   // (datos guardados antes de este cambio) a `passwordHash`, en segundo
   // plano y sin bloquear el render. No usa persistState() (que siempre
@@ -492,10 +538,17 @@
     else if(u && u.password!=null) ok = (u.password===password); // cuenta aún no migrada al hash
     if(!u || !ok){ loginError = 'Usuario o contraseña incorrectos para el perfil seleccionado.'; render(); return; }
     if(!u.active){ loginError = 'Esta cuenta está bloqueada. Contacta al administrador.'; render(); return; }
-    // Si la cuenta todavía tenía la contraseña en texto plano, aprovechamos
-    // este login exitoso para migrarla al hash de una vez (sin esperar a
-    // que el administrador abra la pestaña de Clientes).
-    if(!u.passwordHash && u.password!=null){
+    // Si la cuenta todavía tenía la contraseña en texto plano, o un hash en
+    // el formato viejo (SHA-256 simple, ver needsRehash arriba), aprovechamos
+    // este login exitoso para migrarla al hash nuevo de una vez (sin esperar
+    // a que el administrador abra la pestaña de Clientes).
+    // NOTA: desde que /api/save-state exige sesión de admin para tocar
+    // `users` (ver lib/appStateGuard.js), este guardado en segundo plano ya
+    // no llega al backend compartido para una sesión de cliente — falla en
+    // silencio (catch abajo) y el hash viejo sigue funcionando hasta que un
+    // admin vuelva a guardar esa cuenta desde el panel. Es un efecto
+    // secundario aceptado de cerrar ese hueco de seguridad, no un bug.
+    if((!u.passwordHash && u.password!=null) || needsRehash(u.passwordHash)){
       hashPassword(password).then(function(h){
         u.passwordHash = h;
         delete u.password;
@@ -1134,6 +1187,8 @@
     var errMsg = {
       invalid_input: 'Completa todos los campos. La nueva contraseña debe tener al menos 8 caracteres y coincidir en ambos campos.',
       invalid_current_password: 'La contraseña actual no es correcta.',
+      no_session: 'Tu sesión expiró o no es válida. Cierra sesión y vuelve a entrar para cambiar la contraseña.',
+      too_many_attempts: 'Demasiados intentos. Espera unos minutos e intenta de nuevo.',
       server_error: 'Ocurrió un error al guardar. Intenta nuevamente.'
     };
     return '<div class="card" style="max-width:480px">' +
