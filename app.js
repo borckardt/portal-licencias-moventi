@@ -61,6 +61,7 @@
   var editingRequestId = null;
   var editingClientId = null;
   var notifyTestBusy = false;
+  var confirmDialog = null; // {titulo, mensaje, detalle, etiquetaOk, onOk}
   var openRowMenu = null;
   var rowMenuPos = null;
   var currentTheme = 'light';
@@ -1348,6 +1349,27 @@
   }
 
   /* ================= main render ================= */
+  // Confirmación en la propia página (no confirm() del navegador) para las
+  // acciones que no se pueden deshacer, como enviar el correo de solicitud.
+  function renderConfirmDialog(){
+    if(!confirmDialog) return '';
+    return '<div class="modal-overlay" onclick="App.cancelConfirm()"></div>' +
+      '<div class="modal-card" role="dialog" aria-modal="true">' +
+        '<div class="modal-title">'+esc(confirmDialog.titulo)+'</div>' +
+        '<p class="modal-text">'+esc(confirmDialog.mensaje)+'</p>' +
+        (confirmDialog.detalle ? '<div class="modal-detail">'+confirmDialog.detalle+'</div>' : '') +
+        '<div class="modal-actions">' +
+          '<button class="btn btn-ghost" type="button" onclick="App.cancelConfirm()">Cancelar</button>' +
+          '<button class="btn btn-primary" type="button" onclick="App.acceptConfirm()">'+esc(confirmDialog.etiquetaOk||'Confirmar')+'</button>' +
+        '</div>' +
+      '</div>';
+  }
+
+  function askConfirm(opts){
+    confirmDialog = opts;
+    render();
+  }
+
   function render(){
     var html;
     if(resetTokenFromUrl){
@@ -1376,7 +1398,7 @@
       }
       else html = renderClient(user);
     }
-    document.getElementById('root').innerHTML = html;
+    document.getElementById('root').innerHTML = html + renderConfirmDialog();
     if(highlightRequestId){
       var rowEl = document.getElementById('req-row-'+highlightRequestId);
       if(rowEl && rowEl.scrollIntoView) rowEl.scrollIntoView({behavior:'smooth', block:'center'});
@@ -1609,6 +1631,16 @@
     },
     closeRowMenu: function(){ openRowMenu = null; rowMenuPos = null; render(); },
 
+    cancelConfirm: function(){
+      confirmDialog = null;
+      render();
+    },
+    acceptConfirm: function(){
+      var accion = confirmDialog && confirmDialog.onOk;
+      confirmDialog = null;
+      render();
+      if(accion) accion();
+    },
     sendTestNotify: async function(){
       var recipients = (STATE.settings.notifyEmails||[])
         .map(function(n){ return (n.email||'').trim(); })
@@ -1676,9 +1708,32 @@
       STATE.requests.forEach(function(r){ if(r.status==='aprobado' && !r.notifiedToIngram) selectedForIngram.add(r.id); });
       render();
     },
-    sendToIngram: async function(){
+    // Pide confirmación antes de enviar (evita clics accidentales); el envío
+    // real vive en doSendToIngram.
+    sendToIngram: function(){
       var ingramEmail = (STATE.settings.ingramEmail||'').trim();
       if(!ingramEmail){ showToast('Configura primero el correo de contacto para el envío.', 'error'); return; }
+      var ids = Array.from(selectedForIngram);
+      var items = STATE.requests.filter(function(r){ return ids.indexOf(r.id)>-1 && r.status==='aprobado'; });
+      if(items.length===0){ showToast('Selecciona al menos una solicitud aprobada.', 'error'); return; }
+      var ccList = parseEmailList(STATE.settings.ingramCc);
+      askConfirm({
+        titulo: '¿Seguro que deseas enviar por correo la solicitud de creación?',
+        mensaje: items.length===1
+          ? 'Se enviará 1 solicitud aprobada y quedará marcada como enviada.'
+          : 'Se enviarán ' + items.length + ' solicitudes aprobadas y quedarán marcadas como enviadas.',
+        detalle: '<div><strong>Para:</strong> ' + esc(ingramEmail) + '</div>' +
+          (ccList.length ? '<div><strong>Copia:</strong> ' + esc(ccList.join(', ')) + '</div>' : '') +
+          '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' +
+          items.map(function(r){
+            return '<li>' + esc(r.licenseTypeName) + ' — ' + (r.quantity||1) + ' · ' + esc(r.clientName) + '</li>';
+          }).join('') + '</ul>',
+        etiquetaOk: 'Sí, enviar',
+        onOk: App.doSendToIngram
+      });
+    },
+    doSendToIngram: async function(){
+      var ingramEmail = (STATE.settings.ingramEmail||'').trim();
       var ccList = parseEmailList(STATE.settings.ingramCc);
       var ids = Array.from(selectedForIngram);
       var items = STATE.requests.filter(function(r){ return ids.indexOf(r.id)>-1 && r.status==='aprobado'; });
