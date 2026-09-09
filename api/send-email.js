@@ -85,7 +85,12 @@ module.exports = async function handler(req, res) {
 
   try {
     var sendData = await sendGmail({ to: to, cc: cc, subject: subject, text: text, html: html });
-    res.status(200).json({ ok: true, id: sendData.id });
+    res.status(200).json({
+      ok: true,
+      messageId: sendData.messageId,
+      accepted: sendData.accepted,
+      rejected: sendData.rejected
+    });
   } catch (err) {
     if (err && err.message === 'missing_env') {
       res.status(500).json({ ok: false, error: 'missing_env', missing: err.missing });
