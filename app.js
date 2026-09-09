@@ -98,6 +98,42 @@
     return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"></path></svg>';
   }
 
+  // Iconos minimalistas del nav admin (estilo feather, mismo patrón que themeIcon).
+  function navIcon(key){
+    var paths = {
+      solicitudes: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>',
+      tipos: '<path d="M20.59 13.41 13.42 20.59a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line>',
+      clientes: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>',
+      notificaciones: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path>',
+      reporte: '<line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line>',
+      cuenta: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>'
+    };
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(paths[key]||'')+'</svg>';
+  }
+
+  // Ilustración minimalista (oficina, personas trabajando) para el panel derecho del login.
+  function officeIllustrationSvg(){
+    return '<svg viewBox="0 0 400 300" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">' +
+      '<rect x="30" y="20" width="150" height="110" rx="10" fill="rgba(255,255,255,.06)" stroke="rgba(255,255,255,.18)" stroke-width="2"></rect>' +
+      '<line x1="105" y1="20" x2="105" y2="130" stroke="rgba(255,255,255,.18)" stroke-width="2"></line>' +
+      '<line x1="30" y1="75" x2="180" y2="75" stroke="rgba(255,255,255,.18)" stroke-width="2"></line>' +
+      '<rect x="20" y="220" width="360" height="14" rx="7" fill="var(--teal)" opacity=".9"></rect>' +
+      '<rect x="40" y="234" width="14" height="46" fill="var(--teal)" opacity=".55"></rect>' +
+      '<rect x="346" y="234" width="14" height="46" fill="var(--teal)" opacity=".55"></rect>' +
+      '<circle cx="120" cy="150" r="22" fill="#fff" opacity=".92"></circle>' +
+      '<path d="M78 220c0-26 18-42 42-42s42 16 42 42" fill="#fff" opacity=".92"></path>' +
+      '<rect x="96" y="196" width="48" height="30" rx="4" fill="var(--navy-900)"></rect>' +
+      '<rect x="100" y="200" width="40" height="20" rx="2" fill="var(--teal)" opacity=".7"></rect>' +
+      '<circle cx="270" cy="150" r="22" fill="#fff" opacity=".8"></circle>' +
+      '<path d="M228 220c0-26 18-42 42-42s42 16 42 42" fill="#fff" opacity=".8"></path>' +
+      '<rect x="246" y="196" width="48" height="30" rx="4" fill="var(--navy-900)"></rect>' +
+      '<rect x="250" y="200" width="40" height="20" rx="2" fill="var(--accent)" opacity=".7"></rect>' +
+      '<rect x="330" y="150" width="26" height="30" rx="4" fill="var(--accent)" opacity=".6"></rect>' +
+      '<path d="M343 150c-14-8-18-26-8-38 6 16 4 30 8 38z" fill="var(--teal)"></path>' +
+      '<path d="M343 150c14-6 22-22 16-36-10 14-12 28-16 36z" fill="var(--teal)" opacity=".8"></path>' +
+    '</svg>';
+  }
+
   function uid(prefix){ return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   // Convierte "a@x.com, b@y.com ,, c@z.com" en ['a@x.com','b@y.com','c@z.com'],
@@ -551,7 +587,7 @@
 
   function renderLogin(){
     return '' +
-    '<div class="login-screen"><div class="login-inner">' +
+    '<div class="login-screen"><div class="login-inner-wide">' +
       '<div class="login-topbar">' +
         '<div class="logo"><span class="dot"></span>moventi</div>' +
         '<div style="display:flex;align-items:center;gap:1rem">' +
@@ -559,19 +595,8 @@
           '<button type="button" class="theme-toggle" onclick="App.toggleTheme()">'+themeIcon()+'<span>'+(currentTheme==='dark'?'Modo claro':'Modo oscuro')+'</span></button>' +
         '</div>' +
       '</div>' +
-      '<div class="login-hero">' +
-        '<div>' +
-          '<div class="badge"><span class="pill-dot"></span>MOVENTI' + (ENTRY_MODE==='admin' ? ' · ADMIN' : '') + '</div>' +
-          (ENTRY_MODE==='admin'
-            ? '<h1>Panel de<br><span>administración</span></h1>' +
-              '<p class="sub">Aprueba solicitudes, administra clientes y tipos de licencia, y da seguimiento al reporte.</p>'
-            : '<h1>Portal de<br><span>licencias</span></h1>' +
-              '<p class="sub">Solicita, valida y da seguimiento a las licencias de Google Workspace de tu equipo desde un solo lugar.</p>') +
-        '</div>' +
-        '<div class="orb"></div>' +
-      '</div>' +
-      '<div class="login-form-side">' +
-        '<div class="login-box">' +
+      '<div class="login-grid">' +
+        '<div class="login-col-form"><div class="login-box">' +
           '<h2 style="font-size:1.3rem;font-weight:800;margin-bottom:.3rem">Inicia sesión</h2>' +
           '<p style="color:var(--ink-muted);font-size:.88rem;margin-bottom:1.4rem">' + (ENTRY_MODE==='admin' ? 'Acceso exclusivo para el equipo de Moventi.' : 'Ingresa con las credenciales de tu empresa.') + '</p>' +
           '<form onsubmit="App.submitLogin(event)" class="stack">' +
@@ -581,6 +606,15 @@
           '</form>' +
           (loginError ? '<div class="login-error">'+esc(loginError)+'</div>' : '') +
           (loginRole==='admin' ? renderForgotPasswordBlock() : '') +
+        '</div></div>' +
+        '<div class="login-col-image">' +
+          '<div class="login-illustration">'+officeIllustrationSvg()+'</div>' +
+          '<div class="login-caption">' +
+            '<div class="badge"><span class="pill-dot"></span>MOVENTI' + (ENTRY_MODE==='admin' ? ' · ADMIN' : '') + '</div>' +
+            (ENTRY_MODE==='admin'
+              ? '<h1>Panel de<br><span>administración</span></h1><p class="sub">Aprueba solicitudes, administra clientes y tipos de licencia, y da seguimiento al reporte.</p>'
+              : '<h1>Portal de<br><span>licencias</span></h1><p class="sub">Solicita, valida y da seguimiento a las licencias de Google Workspace de tu equipo desde un solo lugar.</p>') +
+          '</div>' +
         '</div>' +
       '</div>' +
     '</div></div>';
@@ -733,7 +767,7 @@
       ['cuenta','Mi cuenta']
     ];
     return '<div class="side-nav">' + items.map(function(it){
-      return '<div class="nav-item '+(adminTab===it[0]?'active':'')+'" onclick="App.setAdminTab(\''+it[0]+'\')"><span class="ic">•</span><span class="nav-label">'+it[1]+'</span></div>';
+      return '<div class="nav-item '+(adminTab===it[0]?'active':'')+'" onclick="App.setAdminTab(\''+it[0]+'\')"><span class="ic">'+navIcon(it[0])+'</span><span class="nav-label">'+it[1]+'</span></div>';
     }).join('') + '</div>';
   }
 
@@ -862,7 +896,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes con estos filtros.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Necesaria desde</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap no-scrollbar"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Necesaria desde</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 

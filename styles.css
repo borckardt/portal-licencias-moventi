@@ -163,6 +163,9 @@
   td{ padding:.85em .9em; border-bottom:1px solid var(--border); font-size:.88rem; vertical-align:middle; }
   tr:last-child td{ border-bottom:none; }
   .table-wrap{ overflow-x:auto; max-width:100%; }
+  /* Oculta la barra de scroll visual (sigue siendo desplazable) */
+  .no-scrollbar{ scrollbar-width:none; -ms-overflow-style:none; }
+  .no-scrollbar::-webkit-scrollbar{ display:none; height:0; }
   .table-dense th{ padding:.6em .65em; font-size:.66rem; }
   .table-dense td{ padding:.65em .65em; font-size:.83rem; white-space:nowrap; }
   .table-dense td.wrap{ white-space:normal; max-width:170px; }
@@ -216,6 +219,38 @@
 
   .login-form-side{ display:flex; justify-content:center; margin-top:2.2rem; }
   .login-box{ width:100%; max-width:400px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); box-shadow:var(--shadow-md); padding:2rem; }
+
+  /* ---------- login: layout de 2 columnas (formulario + imagen) ---------- */
+  .login-inner-wide{ width:100%; max-width:1100px; }
+  .login-grid{ display:grid; grid-template-columns:minmax(280px,420px) 1fr; gap:2rem; align-items:stretch; }
+  .login-col-form{ display:flex; align-items:center; }
+  .login-col-form .login-box{ margin:0 auto; }
+  .login-col-image{
+    position:relative; overflow:hidden; border-radius:24px; min-height:480px;
+    background:radial-gradient(120% 160% at 12% 0%, var(--navy-700) 0%, var(--navy-900) 60%, #000 120%);
+    display:flex; flex-direction:column; justify-content:flex-end; padding:2rem; color:#fff;
+  }
+  .login-col-image::after{
+    content:''; position:absolute; right:-100px; top:-90px; width:340px; height:340px; border-radius:50%;
+    background:conic-gradient(from 120deg, var(--teal), var(--accent), var(--teal)); filter:blur(64px); opacity:.4;
+  }
+  .login-illustration{ position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:2.4rem 2.4rem 6.5rem; }
+  .login-illustration svg{ width:100%; max-width:340px; height:auto; position:relative; z-index:1; }
+  .login-caption{ position:relative; z-index:2; }
+  .login-caption .badge{
+    display:inline-flex; align-items:center; gap:.5em; padding:.4em .9em; border-radius:99px;
+    background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); font-size:.75rem; font-weight:700;
+    letter-spacing:.06em; text-transform:uppercase; color:#B9E9FF;
+  }
+  .login-caption .badge .pill-dot{ background:var(--teal); }
+  .login-caption h1{ font-size:1.6rem; font-weight:800; line-height:1.1; margin-top:.8rem; }
+  .login-caption h1 span{ background:linear-gradient(90deg,var(--teal),#8FE9D3); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .login-caption p.sub{ margin-top:.5rem; color:rgba(255,255,255,.72); max-width:42ch; font-size:.9rem; }
+  @media (max-width:900px){
+    .login-grid{ grid-template-columns:1fr; }
+    .login-col-image{ min-height:280px; order:2; }
+    .login-illustration{ padding-bottom:5.5rem; }
+  }
   .role-toggle{ display:flex; background:var(--surface-alt); border-radius:12px; padding:4px; gap:4px; margin-bottom:1.6rem; }
   .role-toggle button{ flex:1; border:none; background:transparent; padding:.65em 1em; border-radius:9px; font-weight:700; font-size:.86rem; color:var(--ink-muted); cursor:pointer; }
   .role-toggle button.active{ background:var(--surface); color:var(--ink); box-shadow:var(--shadow-sm); }
