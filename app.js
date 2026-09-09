@@ -111,27 +111,13 @@
     return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(paths[key]||'')+'</svg>';
   }
 
-  // Ilustración minimalista (oficina, personas trabajando) para el panel derecho del login.
-  function officeIllustrationSvg(){
-    return '<svg viewBox="0 0 400 300" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">' +
-      '<rect x="30" y="20" width="150" height="110" rx="10" fill="rgba(255,255,255,.06)" stroke="rgba(255,255,255,.18)" stroke-width="2"></rect>' +
-      '<line x1="105" y1="20" x2="105" y2="130" stroke="rgba(255,255,255,.18)" stroke-width="2"></line>' +
-      '<line x1="30" y1="75" x2="180" y2="75" stroke="rgba(255,255,255,.18)" stroke-width="2"></line>' +
-      '<rect x="20" y="220" width="360" height="14" rx="7" fill="var(--teal)" opacity=".9"></rect>' +
-      '<rect x="40" y="234" width="14" height="46" fill="var(--teal)" opacity=".55"></rect>' +
-      '<rect x="346" y="234" width="14" height="46" fill="var(--teal)" opacity=".55"></rect>' +
-      '<circle cx="120" cy="150" r="22" fill="#fff" opacity=".92"></circle>' +
-      '<path d="M78 220c0-26 18-42 42-42s42 16 42 42" fill="#fff" opacity=".92"></path>' +
-      '<rect x="96" y="196" width="48" height="30" rx="4" fill="var(--navy-900)"></rect>' +
-      '<rect x="100" y="200" width="40" height="20" rx="2" fill="var(--teal)" opacity=".7"></rect>' +
-      '<circle cx="270" cy="150" r="22" fill="#fff" opacity=".8"></circle>' +
-      '<path d="M228 220c0-26 18-42 42-42s42 16 42 42" fill="#fff" opacity=".8"></path>' +
-      '<rect x="246" y="196" width="48" height="30" rx="4" fill="var(--navy-900)"></rect>' +
-      '<rect x="250" y="200" width="40" height="20" rx="2" fill="var(--accent)" opacity=".7"></rect>' +
-      '<rect x="330" y="150" width="26" height="30" rx="4" fill="var(--accent)" opacity=".6"></rect>' +
-      '<path d="M343 150c-14-8-18-26-8-38 6 16 4 30 8 38z" fill="var(--teal)"></path>' +
-      '<path d="M343 150c14-6 22-22 16-36-10 14-12 28-16 36z" fill="var(--teal)" opacity=".8"></path>' +
-    '</svg>';
+  // Iconos para los campos del login (usuario/contraseña).
+  function fieldIcon(key){
+    var paths = {
+      user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>',
+      lock: '<rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>'
+    };
+    return '<span class="login-field-ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(paths[key]||'')+'</svg></span>';
   }
 
   function uid(prefix){ return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -586,38 +572,36 @@
   }
 
   function renderLogin(){
+    var isAdmin = ENTRY_MODE==='admin';
     return '' +
-    '<div class="login-screen"><div class="login-inner-wide">' +
-      '<div class="login-topbar">' +
-        '<div class="logo"><span class="dot"></span>moventi</div>' +
-        '<div style="display:flex;align-items:center;gap:1rem">' +
-          '<span style="color:var(--ink-muted);font-size:.85rem;font-weight:600">Módulo de licencias</span>' +
+    '<div class="login-screen-v2">' +
+      '<div class="login-pane login-pane-form">' +
+        '<div class="login-pane-topbar">' +
+          '<div class="logo"><span class="dot"></span>moventi</div>' +
           '<button type="button" class="theme-toggle" onclick="App.toggleTheme()">'+themeIcon()+'<span>'+(currentTheme==='dark'?'Modo claro':'Modo oscuro')+'</span></button>' +
         '</div>' +
-      '</div>' +
-      '<div class="login-grid">' +
-        '<div class="login-col-form"><div class="login-box">' +
-          '<h2 style="font-size:1.3rem;font-weight:800;margin-bottom:.3rem">Inicia sesión</h2>' +
-          '<p style="color:var(--ink-muted);font-size:.88rem;margin-bottom:1.4rem">' + (ENTRY_MODE==='admin' ? 'Acceso exclusivo para el equipo de Moventi.' : 'Ingresa con las credenciales de tu empresa.') + '</p>' +
+        '<div class="login-pane-form-inner">' +
+          '<h1 class="login-h1">Bienvenido</h1>' +
+          '<p class="login-sub">' + (isAdmin ? 'Inicia sesión con tu cuenta de administrador.' : 'Inicia sesión con las credenciales de tu empresa.') + '</p>' +
           '<form onsubmit="App.submitLogin(event)" class="stack">' +
-            '<div class="field"><label>Usuario</label><input name="username" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required /></div>' +
-            '<div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="new-password" required /></div>' +
+            '<div class="login-field">'+fieldIcon('user')+'<input name="username" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required placeholder="Usuario" /></div>' +
+            '<div class="login-field">'+fieldIcon('lock')+'<input name="password" type="password" autocomplete="new-password" required placeholder="Contraseña" /></div>' +
             '<button class="btn btn-primary" style="margin-top:.4rem;width:100%" type="submit">Ingresar</button>' +
           '</form>' +
           (loginError ? '<div class="login-error">'+esc(loginError)+'</div>' : '') +
           (loginRole==='admin' ? renderForgotPasswordBlock() : '') +
-        '</div></div>' +
-        '<div class="login-col-image">' +
-          '<div class="login-illustration">'+officeIllustrationSvg()+'</div>' +
-          '<div class="login-caption">' +
-            '<div class="badge"><span class="pill-dot"></span>MOVENTI' + (ENTRY_MODE==='admin' ? ' · ADMIN' : '') + '</div>' +
-            (ENTRY_MODE==='admin'
-              ? '<h1>Panel de<br><span>administración</span></h1><p class="sub">Aprueba solicitudes, administra clientes y tipos de licencia, y da seguimiento al reporte.</p>'
-              : '<h1>Portal de<br><span>licencias</span></h1><p class="sub">Solicita, valida y da seguimiento a las licencias de Google Workspace de tu equipo desde un solo lugar.</p>') +
-          '</div>' +
         '</div>' +
       '</div>' +
-    '</div></div>';
+      '<div class="login-pane login-pane-image">' +
+        '<div class="login-pane-image-scrim"></div>' +
+        '<div class="login-pane-image-caption">' +
+          '<div class="badge"><span class="pill-dot"></span>MOVENTI' + (isAdmin ? ' · ADMIN' : '') + '</div>' +
+          (isAdmin
+            ? '<h1>Panel de<br><span>administración</span></h1><p class="sub">Aprueba solicitudes, administra clientes y tipos de licencia, y da seguimiento al reporte.</p>'
+            : '<h1>Portal de<br><span>licencias</span></h1><p class="sub">Solicita, valida y da seguimiento a las licencias de Google Workspace de tu equipo desde un solo lugar.</p>') +
+        '</div>' +
+      '</div>' +
+    '</div>';
   }
 
   function renderForgotPasswordBlock(){
