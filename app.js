@@ -436,6 +436,22 @@
     return order.filter(function(id){ return resultMap.hasOwnProperty(id); }).map(function(id){ return resultMap[id]; });
   }
 
+  // Object.assign pisaba settings completo, así que un destinatario recién
+  // agregado se perdía si el refresco traía la versión anterior del backend.
+  // Los escalares siguen la regla "gana lo local si lo cambié", y notifyEmails
+  // se fusiona por id como el resto de las colecciones.
+  function mergeSettings(baseS, localS, remoteS){
+    var base = baseS || {}, local = localS || {}, remote = remoteS || {};
+    var out = Object.assign({}, remote, local);
+    Object.keys(remote).forEach(function(k){
+      if(k === 'notifyEmails') return;
+      var localTouched = JSON.stringify(local[k]) !== JSON.stringify(base[k]);
+      if(!localTouched) out[k] = remote[k];
+    });
+    out.notifyEmails = mergeCollection(base.notifyEmails, local.notifyEmails, remote.notifyEmails);
+    return out;
+  }
+
   // Sin esto, una pestaña que quedó abierta (ej. un cliente con el
   // formulario de "Nueva solicitud" abierto) sigue mostrando los precios/tipos
   // de licencia con los que cargó la página, aunque el administrador los
@@ -453,7 +469,7 @@
       STATE.users = mergeCollection(base.users, STATE.users, remote.users);
       STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
       STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
-      if(remote.settings) STATE.settings = Object.assign({}, STATE.settings, remote.settings);
+      if(remote.settings) STATE.settings = mergeSettings((baseRemoteState||{}).settings, STATE.settings, remote.settings);
       baseRemoteState = JSON.parse(JSON.stringify(remote));
       saveLocalFallbackState();
       render();
@@ -473,7 +489,7 @@
       STATE.users = mergeCollection(base.users, STATE.users, remote.users);
       STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
       STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
-      if(remote.settings) STATE.settings = Object.assign({}, STATE.settings, remote.settings);
+      if(remote.settings) STATE.settings = mergeSettings((baseRemoteState||{}).settings, STATE.settings, remote.settings);
       baseRemoteState = JSON.parse(JSON.stringify(remote));
       saveLocalFallbackState();
     }catch(e){ console.error(e); }
@@ -1612,22 +1628,24 @@
         ? 'Correo de prueba enviado a: ' + recipients.join(', ')
         : 'No se pudo enviar la prueba (' + (lastEmailError||'sin backend') + ').', ok ? 'success' : 'error');
     },
-    addNotifyEmail: function(ev){
+    addNotifyEmail: async function(ev){
       ev.preventDefault();
       var f = ev.target;
       var name = f.name.value.trim();
       var email = f.email.value.trim();
       if(!email || email.indexOf('@')===-1){ showToast('Ingresa un correo válido.', 'error'); return; }
-      commit(function(s){
+      f.reset();
+      var synced = await commitSynced(function(s){
         if(!s.settings.notifyEmails) s.settings.notifyEmails = [];
         s.settings.notifyEmails.push({ id: uid('ne'), name: name, email: email });
       });
-      f.reset();
-      showToast('Destinatario añadido.', 'success');
+      showToast(synced
+        ? 'Destinatario añadido. Ya recibirá los avisos.'
+        : 'No se pudo guardar el destinatario en el servidor; no recibirá avisos todavía. Reintenta.', synced ? 'success' : 'error');
     },
-    removeNotifyEmail: function(id){
-      commit(function(s){ s.settings.notifyEmails = (s.settings.notifyEmails||[]).filter(function(x){ return x.id!==id; }); });
-      showToast('Destinatario eliminado.', 'success');
+    removeNotifyEmail: async function(id){
+      var synced = await commitSynced(function(s){ s.settings.notifyEmails = (s.settings.notifyEmails||[]).filter(function(x){ return x.id!==id; }); });
+      showToast(synced ? 'Destinatario eliminado.' : 'No se pudo sincronizar la eliminación. Reintenta.', synced ? 'success' : 'error');
     },
     setIngramEmail: function(val){
       commit(function(s){ s.settings.ingramEmail = val.trim(); });
