@@ -12,7 +12,10 @@
   // pantalla, así que un cliente jamás ve ni puede intentar la puerta de
   // administrador, y viceversa.
   var ENTRY_MODE = (typeof window !== 'undefined' && window.PORTAL_ENTRY_MODE === 'admin') ? 'admin' : 'client';
-  // A dónde llega el aviso automático de "nueva solicitud creada por un cliente".
+  // A dónde llega el aviso automático de "nueva solicitud creada por un
+  // cliente", por defecto (se usa solo si no hay destinatarios configurados
+  // en STATE.settings.notifyEmails desde el panel de administrador —
+  // pestaña "Notificaciones").
   var NEW_REQUEST_NOTIFY_EMAILS = ['sborckardt@moventiglobal.com', 'administracion@moventiglobal.com'];
   var DEFAULT_EMAIL_SUBJECT = 'Solicitud de habilitación de licencias — Moventi ({{cantidad}} {{unidad}})';
   var DEFAULT_EMAIL_BODY = 'Hola,\n\nSe solicita generar/habilitar las siguientes licencias aprobadas:\n\n{{detalle}}\n\nSaludos,\n{{admin}}';
@@ -26,6 +29,15 @@
   var STATE = JSON.parse(document.getElementById('app-state').textContent);
   if(!STATE.settings) STATE.settings = { ingramEmail: '' };
   if(STATE.settings.ingramCc===undefined) STATE.settings.ingramCc = '';
+  // Destinatarios configurables del aviso de "nueva solicitud creada por un
+  // cliente" (pestaña Notificaciones del panel admin). Se siembra una vez
+  // con los correos que antes estaban fijos en el código, para no perder
+  // destinatarios existentes al desplegar este cambio.
+  if(!STATE.settings.notifyEmails){
+    STATE.settings.notifyEmails = NEW_REQUEST_NOTIFY_EMAILS.map(function(e){
+      return { id: uid('ne'), name: '', email: e };
+    });
+  }
   // Cuando corremos como sitio Vercel (fuera del runtime de artifacts de
   // Claude), los datos compartidos (clientes, solicitudes, tipos de
   // licencia) viven en Vercel Blob vía /api/get-state y /api/save-state, así
@@ -62,6 +74,12 @@
     resetTokenFromUrl = __params.get('resetToken');
   }catch(e){}
   var resetPasswordState = { busy: false, done: false, error: '' };
+  // Si el botón "Revisar y aprobar" del correo de aviso trae
+  // ?verSolicitud=<id>, al iniciar sesión como admin saltamos directo a la
+  // pestaña Solicitudes con esa fila resaltada, para reducir pasos.
+  var highlightRequestId = null;
+  var highlightJumpDone = false;
+  try{ highlightRequestId = __params.get('verSolicitud'); }catch(e){}
 
   function initTheme(){
     var saved = null;
@@ -133,6 +151,23 @@
   }
 
   function notifyNewRequest(r){
+    var recipients = (STATE.settings.notifyEmails||[])
+      .map(function(n){ return (n.email||'').trim(); })
+      .filter(function(e){ return e && e.indexOf('@')>-1; });
+    if(!recipients.length) recipients = NEW_REQUEST_NOTIFY_EMAILS;
+
+    // Enlace de un clic para que quien recibe el aviso (p.ej. un
+    // colaborador sin más tarea que aprobar) caiga directo en el panel de
+    // administrador con esta solicitud ya localizada y resaltada, en vez de
+    // tener que entrar y buscarla manualmente entre todas las demás. Los
+    // navegadores/clientes de correo abren los enlaces normales en una
+    // pestaña nueva por defecto; target="_blank" además lo refuerza cuando
+    // el cliente de correo respeta ese atributo.
+    // El portal sirve /admin como ruta propia (ver vercel.json / admin.html),
+    // así que construimos la URL contra el origen, no contra la ruta actual
+    // (esta función corre en la página de cliente, no en la de admin).
+    var approveUrl = window.location.origin + '/admin?verSolicitud=' + encodeURIComponent(r.id);
+
     var subject = 'Nueva solicitud de licencia — ' + r.clientName + ' (' + (r.quantity||1) + ' ' + ((r.quantity||1)===1?'licencia':'licencias') + ')';
     var text = 'Se registró una nueva solicitud de licencia:\n\n' +
       '- Cliente: ' + r.clientName + '\n' +
@@ -141,7 +176,8 @@
       '- Cantidad: ' + (r.quantity||1) + '\n' +
       '- Necesaria desde: ' + fmtDateShort(r.neededFrom) + '\n' +
       (r.note ? ('- Nota del cliente: ' + r.note + '\n') : '') +
-      '\nIngresa al portal para revisarla y aprobarla.';
+      '\nRevisar y aprobar directamente: ' + approveUrl + '\n' +
+      '\n(Si no tienes sesión iniciada, primero te pedirá el login del panel y luego te lleva igual a esta solicitud.)';
     var html = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
       '<p>Se registró una nueva solicitud de licencia:</p>' +
       '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
@@ -153,9 +189,13 @@
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+fmtDateShort(r.neededFrom)+'</td></tr>' +
       '</table>' +
       (r.note ? ('<p><strong>Nota del cliente:</strong> '+esc(r.note)+'</p>') : '') +
-      '<p>Ingresa al portal para revisarla y aprobarla.</p>' +
+      '<p style="margin-top:18px">' +
+        '<a href="'+esc(approveUrl)+'" target="_blank" rel="noopener" ' +
+        'style="display:inline-block;background:#4f46e5;color:#ffffff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600;font-family:Arial,sans-serif;font-size:14px">Revisar y aprobar solicitud</a>' +
+      '</p>' +
+      '<p style="color:#888;font-size:12px">Si no tienes sesión iniciada en el portal, primero te pedirá el usuario y contraseña del panel y luego te lleva igual a esta solicitud.</p>' +
       '</div>';
-    sendEmailBestEffort(NEW_REQUEST_NOTIFY_EMAILS, subject, text, html);
+    sendEmailBestEffort(recipients, subject, text, html);
   }
 
   function reqTotal(r){ return Number(r.price||0) * Number(r.quantity||1); }
@@ -176,15 +216,7 @@
     return u;
   }
   function setCurrentUser(u){ sessionStorage.setItem('moventi_uid', u ? u.id : ''); }
-  function logout(){
-    sessionStorage.removeItem('moventi_uid');
-    adminAccountState = { busy:false, done:false, error:'' };
-    // Best-effort: borra también la cookie de sesión de admin del lado del
-    // servidor (ver lib/adminSession.js). Si falla (backend no disponible en
-    // este hosting), no bloquea el cierre de sesión local.
-    fetch('/api/admin-logout', { method:'POST', headers: portalApiHeaders() }).catch(function(){});
-    render();
-  }
+  function logout(){ sessionStorage.removeItem('moventi_uid'); adminAccountState = { busy:false, done:false, error:'' }; render(); }
 
   /* ================= persistence ================= */
   function showToast(msg, kind){
@@ -231,70 +263,32 @@
      Antes las contraseñas de los clientes se guardaban en texto plano
      dentro de STATE (visible para cualquiera con las herramientas de
      desarrollador — clic derecho → Inspeccionar — y en el propio HTML de la
-     página). Se guardan como hash usando la Web Crypto API nativa del
-     navegador — no depende de ninguna librería externa, así que no choca
-     con la Content-Security-Policy del sitio.
-
-     Formato nuevo: 'pbkdf2:iteraciones:saltHex:hashHex' (PBKDF2-SHA256, 150k
-     iteraciones — deliberadamente lento, a diferencia de un SHA-256 simple,
-     para que si esta base de datos se filtrara algún día no sea trivial de
-     fuerza-brutear offline). El formato viejo ('saltHex:sha256Hex', un solo
-     SHA-256) se sigue aceptando solo para verificar cuentas que ya
-     estuvieran guardadas así — hashPassword() ya no genera hashes nuevos en
-     ese formato; se migran solas al formato nuevo la próxima vez que esa
-     cuenta inicie sesión (ver el login más abajo), igual que ya se hacía
-     para las que tenían `password` en texto plano. */
-  var PBKDF2_ITERATIONS = 150000;
+     página). Ahora se guardan como hash salteado (misma técnica que ya usa
+     el backend para la cuenta de administrador, ver lib/adminAuth.js:
+     SHA-256 de "salt:contraseña", guardado como "salt:hashHex"), usando la
+     Web Crypto API nativa del navegador — no depende de ninguna librería
+     externa, así que no choca con la Content-Security-Policy del sitio. */
   function randomHex(byteLen){
     var arr = new Uint8Array(byteLen);
     (window.crypto || window.msCrypto).getRandomValues(arr);
     return Array.prototype.map.call(arr, function(b){ return b.toString(16).padStart(2,'0'); }).join('');
   }
-  function hexToBytes(hex){
-    return new Uint8Array((hex.match(/.{2}/g)||[]).map(function(b){ return parseInt(b,16); }));
-  }
-  function bytesToHex(bytes){
-    return Array.prototype.map.call(new Uint8Array(bytes), function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-  }
   async function sha256Hex(str){
-    var digestBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-    return bytesToHex(digestBuf);
+    var data = new TextEncoder().encode(str);
+    var digestBuf = await crypto.subtle.digest('SHA-256', data);
+    return Array.prototype.map.call(new Uint8Array(digestBuf), function(b){ return b.toString(16).padStart(2,'0'); }).join('');
   }
-  async function pbkdf2Hex(password, saltHex, iterations){
-    var keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), {name:'PBKDF2'}, false, ['deriveBits']);
-    var bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt: hexToBytes(saltHex), iterations: iterations, hash:'SHA-256'}, keyMaterial, 256);
-    return bytesToHex(bits);
-  }
-  async function hashPasswordPbkdf2(password, saltHex){
-    saltHex = saltHex || randomHex(16);
-    var hex = await pbkdf2Hex(password, saltHex, PBKDF2_ITERATIONS);
-    return 'pbkdf2:' + PBKDF2_ITERATIONS + ':' + saltHex + ':' + hex;
-  }
-  async function hashPasswordLegacySha256(password, salt){
+  async function hashPassword(password, salt){
     salt = salt || randomHex(16);
     var digest = await sha256Hex(salt + ':' + password);
     return salt + ':' + digest;
   }
-  // Punto de entrada usado al crear cuentas o cambiar contraseñas — siempre
-  // produce el formato nuevo (PBKDF2).
-  async function hashPassword(password){
-    return hashPasswordPbkdf2(password);
-  }
   async function verifyPassword(password, stored){
-    if(!stored) return false;
-    if(stored.indexOf('pbkdf2:')===0){
-      var parts = stored.split(':');
-      if(parts.length!==4) return false;
-      var computed = await pbkdf2Hex(password, parts[2], parseInt(parts[1],10));
-      return computed === parts[3];
-    }
-    if(stored.indexOf(':')!==-1){
-      var salt = stored.split(':')[0];
-      return (await hashPasswordLegacySha256(password, salt)) === stored;
-    }
-    return false;
+    if(!stored || stored.indexOf(':')===-1) return false;
+    var salt = stored.split(':')[0];
+    var computed = await hashPassword(password, salt);
+    return computed === stored;
   }
-  function needsRehash(stored){ return !!stored && stored.indexOf('pbkdf2:')!==0; }
   // Migra cuentas de cliente que todavía tengan `password` en texto plano
   // (datos guardados antes de este cambio) a `passwordHash`, en segundo
   // plano y sin bloquear el render. No usa persistState() (que siempre
@@ -538,17 +532,10 @@
     else if(u && u.password!=null) ok = (u.password===password); // cuenta aún no migrada al hash
     if(!u || !ok){ loginError = 'Usuario o contraseña incorrectos para el perfil seleccionado.'; render(); return; }
     if(!u.active){ loginError = 'Esta cuenta está bloqueada. Contacta al administrador.'; render(); return; }
-    // Si la cuenta todavía tenía la contraseña en texto plano, o un hash en
-    // el formato viejo (SHA-256 simple, ver needsRehash arriba), aprovechamos
-    // este login exitoso para migrarla al hash nuevo de una vez (sin esperar
-    // a que el administrador abra la pestaña de Clientes).
-    // NOTA: desde que /api/save-state exige sesión de admin para tocar
-    // `users` (ver lib/appStateGuard.js), este guardado en segundo plano ya
-    // no llega al backend compartido para una sesión de cliente — falla en
-    // silencio (catch abajo) y el hash viejo sigue funcionando hasta que un
-    // admin vuelva a guardar esa cuenta desde el panel. Es un efecto
-    // secundario aceptado de cerrar ese hueco de seguridad, no un bug.
-    if((!u.passwordHash && u.password!=null) || needsRehash(u.passwordHash)){
+    // Si la cuenta todavía tenía la contraseña en texto plano, aprovechamos
+    // este login exitoso para migrarla al hash de una vez (sin esperar a
+    // que el administrador abra la pestaña de Clientes).
+    if(!u.passwordHash && u.password!=null){
       hashPassword(password).then(function(h){
         u.passwordHash = h;
         delete u.password;
@@ -741,6 +728,7 @@
       ['solicitudes','Solicitudes'],
       ['tipos','Tipos de licencia'],
       ['clientes','Clientes'],
+      ['notificaciones','Notificaciones'],
       ['reporte','Reporte'],
       ['cuenta','Mi cuenta']
     ];
@@ -794,7 +782,7 @@
       if(isEditing){
         var typeOptions = allTypes.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
         var projectOptionsEdit = PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(p===r.project?'selected':'')+'>'+esc(p)+'</option>'; }).join('');
-        return '<tr class="editing-row">' +
+        return '<tr class="editing-row" id="req-row-'+r.id+'">' +
           '<td></td>' +
           '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
           '<td class="wrap">'+esc(r.clientName)+'</td>' +
@@ -827,7 +815,7 @@
         : (r.notifiedToIngram
           ? '<span class="pill status-enviado">Enviado</span>'
           : '<span class="pill status-sinenviar">Pendiente</span>');
-      return '<tr>' +
+      return '<tr id="req-row-'+r.id+'" class="'+(r.id===highlightRequestId?'row-highlight':'')+'">' +
         '<td>'+checkbox+'</td>' +
         '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
         '<td class="wrap">'+esc(r.clientName)+'</td>' +
@@ -1056,6 +1044,33 @@
     '</div>';
   }
 
+  function renderAdminNotificaciones(){
+    var list = STATE.settings.notifyEmails || [];
+    var rows = list.map(function(n){
+      return '<tr>' +
+        '<td class="lt-name">'+esc(n.name||'—')+'</td>' +
+        '<td class="mono">'+esc(n.email)+'</td>' +
+        '<td><button class="btn btn-danger btn-sm" onclick="App.removeNotifyEmail(\''+n.id+'\')">Eliminar</button></td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div class="section-head"><h2>Notificaciones</h2><p>Elige a quién le llega el aviso automático por correo cuando un cliente registra una nueva solicitud de licencia. El correo incluye un botón para revisar y aprobar la solicitud directamente, sin tener que buscarla manualmente en el panel.</p></div>' +
+    '<div class="grid-2">' +
+      '<div class="card card-pad">' +
+        '<div class="card-title">Añadir destinatario</div>' +
+        '<form onsubmit="App.addNotifyEmail(event)" class="stack">' +
+          '<div class="field"><label>Nombre (opcional)</label><input name="name" placeholder="Ej. Wilmer" /></div>' +
+          '<div class="field"><label>Correo</label><input name="email" type="email" placeholder="wilmer@moventiglobal.com" required /></div>' +
+          '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Añadir</button>' +
+        '</form>' +
+      '</div>' +
+      '<div class="card">' +
+        (list.length===0 ? '<div class="table-empty">No hay destinatarios configurados. Mientras tanto se usa un correo predeterminado del sistema.</div>' :
+        '<div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Correo</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '</div>' +
+    '</div>';
+  }
+
   function renderAdminReporte(){
     if(reportFilter.from===null && reportFilter.to===null && reportFilter.quick){
       var qd = quickRangeDates(reportFilter.quick);
@@ -1187,8 +1202,6 @@
     var errMsg = {
       invalid_input: 'Completa todos los campos. La nueva contraseña debe tener al menos 8 caracteres y coincidir en ambos campos.',
       invalid_current_password: 'La contraseña actual no es correcta.',
-      no_session: 'Tu sesión expiró o no es válida. Cierra sesión y vuelve a entrar para cambiar la contraseña.',
-      too_many_attempts: 'Demasiados intentos. Espera unos minutos e intenta de nuevo.',
       server_error: 'Ocurrió un error al guardar. Intenta nuevamente.'
     };
     return '<div class="card" style="max-width:480px">' +
@@ -1212,6 +1225,7 @@
     if(adminTab==='solicitudes') body = renderAdminSolicitudes();
     else if(adminTab==='tipos') body = renderAdminTipos();
     else if(adminTab==='clientes') body = renderAdminClientes();
+    else if(adminTab==='notificaciones') body = renderAdminNotificaciones();
     else if(adminTab==='cuenta') body = renderAdminCuenta(user);
     else body = renderAdminReporte();
 
@@ -1227,10 +1241,32 @@
     } else {
       var user = currentUser();
       if(!user) html = renderLogin();
-      else if(user.role==='admin') html = renderAdmin(user);
+      else if(user.role==='admin'){
+        // Botón "Revisar y aprobar solicitud" del correo de aviso: la
+        // primera vez que renderizamos ya logueados como admin con
+        // ?verSolicitud=<id> en la URL, saltamos a la pestaña Solicitudes
+        // sin filtros (para no ocultar la fila) y limpiamos la URL. La
+        // fila se sigue resaltando (ver renderAdminSolicitudes) mientras
+        // highlightRequestId no cambie.
+        if(highlightRequestId && !highlightJumpDone){
+          highlightJumpDone = true;
+          adminTab = 'solicitudes';
+          solFilter = { cliente:'todos', estado:'todos', proyecto:'todos' };
+          try{
+            var url = new URL(window.location.href);
+            url.searchParams.delete('verSolicitud');
+            window.history.replaceState({}, '', url.toString());
+          }catch(e){}
+        }
+        html = renderAdmin(user);
+      }
       else html = renderClient(user);
     }
     document.getElementById('root').innerHTML = html;
+    if(highlightRequestId){
+      var rowEl = document.getElementById('req-row-'+highlightRequestId);
+      if(rowEl && rowEl.scrollIntoView) rowEl.scrollIntoView({behavior:'smooth', block:'center'});
+    }
   }
 
   /* ================= actions (exposed) ================= */
@@ -1448,6 +1484,23 @@
     },
     closeRowMenu: function(){ openRowMenu = null; rowMenuPos = null; render(); },
 
+    addNotifyEmail: function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var name = f.name.value.trim();
+      var email = f.email.value.trim();
+      if(!email || email.indexOf('@')===-1){ showToast('Ingresa un correo válido.', 'error'); return; }
+      commit(function(s){
+        if(!s.settings.notifyEmails) s.settings.notifyEmails = [];
+        s.settings.notifyEmails.push({ id: uid('ne'), name: name, email: email });
+      });
+      f.reset();
+      showToast('Destinatario añadido.', 'success');
+    },
+    removeNotifyEmail: function(id){
+      commit(function(s){ s.settings.notifyEmails = (s.settings.notifyEmails||[]).filter(function(x){ return x.id!==id; }); });
+      showToast('Destinatario eliminado.', 'success');
+    },
     setIngramEmail: function(val){
       commit(function(s){ s.settings.ingramEmail = val.trim(); });
       showToast('Correo de contacto actualizado.', 'success');
