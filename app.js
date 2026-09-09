@@ -435,6 +435,26 @@
     }catch(e){ console.error(e); }
   }
 
+  // Trae y fusiona el estado del backend sin repintar: se usa justo antes de
+  // validar un login para que la contraseña que acaba de poner el admin ya
+  // valga aunque esta pestaña se haya abierto antes del cambio.
+  async function syncStateForLogin(){
+    if(!stateBackendAvailable) return;
+    try{
+      var remoteRes = await fetchRemoteState();
+      var remote = remoteRes && remoteRes.state;
+      if(!remote) return;
+      var base = baseRemoteState || remote;
+      STATE.users = mergeCollection(base.users, STATE.users, remote.users);
+      STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
+      STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
+      if(remote.settings) STATE.settings = Object.assign({}, STATE.settings, remote.settings);
+      baseRemoteState = JSON.parse(JSON.stringify(remote));
+      saveLocalFallbackState();
+    }catch(e){ console.error(e); }
+  }
+
+  // Devuelve true solo si el cambio quedó guardado en el backend compartido.
   async function persistState(){
     saveUiState();
     if(!artifactCap){
@@ -456,37 +476,40 @@
           baseRemoteState = JSON.parse(JSON.stringify(STATE));
           saveLocalFallbackState();
           render();
+          return true;
         }catch(err){
           console.error(err);
           // Si el backend falla justo en este guardado, al menos no perdemos
           // el cambio: queda en localStorage de este navegador.
           saveLocalFallbackState();
           showToast('No se pudo sincronizar con el servidor; el cambio quedó guardado solo en este navegador.', 'error');
+          return false;
         }
-        return;
       }
       // Sin backend disponible (por ejemplo, corriendo este HTML fuera de
       // Vercel): fallback a localStorage de este navegador. NOTE: esto NO
       // sincroniza entre dispositivos/navegadores.
       saveLocalFallbackState();
-      return;
+      return false;
     }
     try{
       var res = await fetch(location.href, {cache:'no-store'});
       var raw = await res.text();
       var marker = /<script id="app-state" type="application\/json">[\s\S]*?<\/script>/;
-      if(!marker.test(raw)){ console.warn('state marker not found'); return; }
+      if(!marker.test(raw)){ console.warn('state marker not found'); return false; }
       var payload = JSON.stringify(STATE).replace(/</g, '\\u003c');
       var newHtml = raw.replace(marker, '<script id="app-state" type="application/json">' + payload + '</' + 'script>');
       await artifactCap.publish(newHtml);
+      return true;
     }catch(err){
-      if(err && err.code === 'conflict') return;
+      if(err && err.code === 'conflict') return false;
       if(err && (err.code === 'not_writer' || err.code === 'not_granted')){
         showToast('No tienes permiso de edición sobre esta página. Pide acceso de editor al dueño del enlace.', 'error');
-        return;
+        return false;
       }
       console.error(err);
       showToast('No se pudo guardar el cambio. Intenta de nuevo.', 'error');
+      return false;
     }
   }
 
@@ -494,6 +517,14 @@
     mutator(STATE);
     render();
     persistState();
+  }
+
+  // Igual que commit() pero espera el guardado y dice si llegó al backend
+  // compartido: se usa donde confirmar en falso rompe algo (credenciales).
+  async function commitSynced(mutator){
+    mutator(STATE);
+    render();
+    return await persistState();
   }
 
   async function downloadCsv(filename, csvText){
@@ -556,6 +587,8 @@
       }
       // verified === null: no había backend disponible, seguimos abajo con la validación local.
     }
+    // El admin pudo cambiar la contraseña después de que esta pestaña cargó.
+    await syncStateForLogin();
     var u = STATE.users.find(function(x){ return x.username===username && x.role===loginRole; });
     var ok = false;
     if(u && u.passwordHash) ok = await verifyPassword(password, u.passwordHash);
@@ -1711,10 +1744,12 @@
       var passwordValue = f.password.value;
       if(STATE.users.some(function(u){ return u.username===username; })){ showToast('Ese usuario ya existe.', 'error'); return; }
       var hash = await hashPassword(passwordValue);
-      commit(function(s){
+      var synced = await commitSynced(function(s){
         s.users.push({ id: uid('u'), username: username, passwordHash: hash, role: 'client', name: f.name.value.trim(), active: true });
       });
-      showToast('Cuenta de cliente creada.', 'success');
+      showToast(synced
+        ? 'Cuenta de cliente creada. Ya puede iniciar sesión en el portal.'
+        : 'Cuenta creada solo en este navegador: no se pudo sincronizar, el cliente aún no podrá entrar. Reintenta.', synced ? 'success' : 'error');
     },
     toggleUserActive: function(id){
       commit(function(s){ var u = s.users.find(function(x){return x.id===id;}); if(u) u.active = !u.active; });
@@ -1738,7 +1773,8 @@
       var clash = STATE.users.some(function(u){ return u.id!==id && u.username===username; });
       if(clash){ showToast('Ese usuario ya existe.', 'error'); return; }
       var newHash = newPassword ? await hashPassword(newPassword) : null;
-      commit(function(s){
+      editingClientId = null;
+      var synced = await commitSynced(function(s){
         var u = s.users.find(function(x){ return x.id===id; });
         if(!u) return;
         var oldUsername = u.username;
@@ -1748,8 +1784,13 @@
           s.requests.forEach(function(r){ if(r.clientUsername===oldUsername) r.clientUsername = username; });
         }
       });
-      editingClientId = null;
-      showToast('Cliente actualizado.', 'success');
+      if(!synced){
+        showToast('El cambio no se sincronizó: el cliente seguirá entrando con sus datos anteriores. Reintenta.', 'error');
+      } else {
+        showToast(newHash
+          ? 'Cliente actualizado. La nueva contraseña ya vale para su login.'
+          : 'Cliente actualizado.', 'success');
+      }
     },
     removeUser: function(id){
       commit(function(s){ s.users = s.users.filter(function(x){ return x.id!==id; }); });
