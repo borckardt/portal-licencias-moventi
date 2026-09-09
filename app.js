@@ -117,7 +117,15 @@
       user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>',
       lock: '<rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>'
     };
-    return '<span class="login-field-ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(paths[key]||'')+'</svg></span>';
+    return '<span class="login-field-ic" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(paths[key]||'')+'</svg></span>';
+  }
+
+  // Icono del botón mostrar/ocultar contraseña.
+  function eyeIcon(visible){
+    var d = visible
+      ? '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><line x1="1" y1="1" x2="23" y2="23"></line>'
+      : '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+d+'</svg>';
   }
 
   function uid(prefix){ return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -573,41 +581,45 @@
 
   function renderLogin(){
     var isAdmin = ENTRY_MODE==='admin';
+    // foto distinta por modo de entrada (CSS no conoce el modo)
+    var photo = isAdmin ? '/assets/login-office-admin.jpg' : '/assets/login-office.jpg';
     return '' +
-    '<div class="login-screen-v2">' +
+    '<div class="login-screen-v2"><div class="login-card">' +
       '<div class="login-pane login-pane-form">' +
         '<div class="login-pane-topbar">' +
           '<div class="logo"><span class="dot"></span>moventi</div>' +
-          '<button type="button" class="theme-toggle" onclick="App.toggleTheme()">'+themeIcon()+'<span>'+(currentTheme==='dark'?'Modo claro':'Modo oscuro')+'</span></button>' +
         '</div>' +
         '<div class="login-pane-form-inner">' +
-          '<h1 class="login-h1">Bienvenido</h1>' +
-          '<p class="login-sub">' + (isAdmin ? 'Inicia sesión con tu cuenta de administrador.' : 'Inicia sesión con las credenciales de tu empresa.') + '</p>' +
-          '<form onsubmit="App.submitLogin(event)" class="stack">' +
-            '<div class="login-field">'+fieldIcon('user')+'<input name="username" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required placeholder="Usuario" /></div>' +
-            '<div class="login-field">'+fieldIcon('lock')+'<input name="password" type="password" autocomplete="new-password" required placeholder="Contraseña" /></div>' +
-            '<button class="btn btn-primary" style="margin-top:.4rem;width:100%" type="submit">Ingresar</button>' +
+          '<h1 class="login-h1">Inicia sesión</h1>' +
+          '<p class="login-sub">' + (isAdmin ? 'Ingresa para continuar al panel de administración.' : 'Ingresa para continuar al portal de licencias.') + '</p>' +
+          '<form onsubmit="App.submitLogin(event)">' +
+            '<div class="login-field">' +
+              '<label for="login-username">Usuario</label>' +
+              '<div class="login-input-wrap">'+fieldIcon('user')+'<input id="login-username" name="username" type="text" autocomplete="username" autocorrect="off" autocapitalize="none" spellcheck="false" required autofocus /></div>' +
+            '</div>' +
+            '<div class="login-field">' +
+              '<label for="login-password">Contraseña</label>' +
+              '<div class="login-input-wrap">'+fieldIcon('lock')+
+                '<input id="login-password" name="password" type="password" autocomplete="current-password" required enterkeyhint="go" />' +
+                '<button type="button" class="login-reveal" aria-label="Mostrar la contraseña en pantalla" aria-pressed="false" onclick="App.toggleLoginPassword(this)">'+eyeIcon(false)+'</button>' +
+              '</div>' +
+            '</div>' +
+            '<button class="btn btn-primary login-submit" type="submit">Ingresar</button>' +
           '</form>' +
-          (loginError ? '<div class="login-error">'+esc(loginError)+'</div>' : '') +
+          (loginError ? '<div class="login-error" role="alert">'+esc(loginError)+'</div>' : '') +
           (loginRole==='admin' ? renderForgotPasswordBlock() : '') +
         '</div>' +
       '</div>' +
-      '<div class="login-pane login-pane-image">' +
-        '<div class="login-pane-image-scrim"></div>' +
-        '<div class="login-pane-image-caption">' +
-          '<div class="badge"><span class="pill-dot"></span>MOVENTI' + (isAdmin ? ' · ADMIN' : '') + '</div>' +
-          (isAdmin
-            ? '<h1>Panel de<br><span>administración</span></h1><p class="sub">Aprueba solicitudes, administra clientes y tipos de licencia, y da seguimiento al reporte.</p>'
-            : '<h1>Portal de<br><span>licencias</span></h1><p class="sub">Solicita, valida y da seguimiento a las licencias de Google Workspace de tu equipo desde un solo lugar.</p>') +
-        '</div>' +
+      '<div class="login-pane login-pane-image'+(isAdmin?' login-pane-image--admin':'')+'" style="background-image:url(\''+photo+'\')" role="img" aria-label="'+(isAdmin?'Equipo de Moventi en una sesión de trabajo':'Equipo de Moventi colaborando en la oficina')+'">' +
+        '<button type="button" class="theme-toggle theme-toggle-over" onclick="App.toggleTheme()">'+themeIcon()+'<span>'+(currentTheme==='dark'?'Modo claro':'Modo oscuro')+'</span></button>' +
       '</div>' +
-    '</div>';
+    '</div></div>';
   }
 
   function renderForgotPasswordBlock(){
     if(!forgotPasswordOpen){
-      return '<p style="margin-top:.9rem;text-align:right">' +
-        '<a href="#" onclick="App.startForgotPassword(event)" style="font-size:.82rem;color:var(--ink-muted);text-decoration:underline">¿Olvidaste tu contraseña?</a>' +
+      return '<p class="login-forgot">' +
+        '<a href="#" onclick="App.startForgotPassword(event)">¿Olvidaste tu contraseña?</a>' +
         '</p>';
     }
     if(forgotPasswordSent){
@@ -1305,6 +1317,17 @@
       el.dispatchEvent(new Event('change', {bubbles:true}));
     },
     toggleTheme: function(){ currentTheme = currentTheme==='dark' ? 'light' : 'dark'; applyTheme(); render(); },
+    // Mostrar/ocultar contraseña sin re-render (no perder lo escrito ni el foco).
+    toggleLoginPassword: function(btn){
+      var input = document.getElementById('login-password');
+      if(!input) return;
+      var show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+      btn.setAttribute('aria-label', show ? 'Ocultar la contraseña' : 'Mostrar la contraseña en pantalla');
+      btn.innerHTML = eyeIcon(show);
+      input.focus();
+    },
     submitLogin: async function(ev){
       ev.preventDefault();
       var f = ev.target;
