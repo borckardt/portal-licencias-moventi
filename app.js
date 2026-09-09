@@ -192,6 +192,9 @@
   }
 
   async function notifyNewRequest(r){
+    // La pestaña del cliente pudo cargar antes de que el admin agregara o
+    // cambiara destinatarios: sin releer, el aviso sale a la lista vieja.
+    await syncStateFromBackend();
     var recipients = (STATE.settings.notifyEmails||[])
       .map(function(n){ return (n.email||'').trim(); })
       .filter(function(e){ return e && e.indexOf('@')>-1; });
@@ -460,7 +463,7 @@
   // Trae y fusiona el estado del backend sin repintar: se usa justo antes de
   // validar un login para que la contraseña que acaba de poner el admin ya
   // valga aunque esta pestaña se haya abierto antes del cambio.
-  async function syncStateForLogin(){
+  async function syncStateFromBackend(){
     if(!stateBackendAvailable) return;
     try{
       var remoteRes = await fetchRemoteState();
@@ -610,7 +613,7 @@
       // verified === null: no había backend disponible, seguimos abajo con la validación local.
     }
     // El admin pudo cambiar la contraseña después de que esta pestaña cargó.
-    await syncStateForLogin();
+    await syncStateFromBackend();
     var u = STATE.users.find(function(x){ return x.username===username && x.role===loginRole; });
     var ok = false;
     if(u && u.passwordHash) ok = await verifyPassword(password, u.passwordHash);
