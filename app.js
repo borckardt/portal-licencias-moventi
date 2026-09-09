@@ -60,6 +60,7 @@
   var selectedForIngram = new Set();
   var editingRequestId = null;
   var editingClientId = null;
+  var notifyTestBusy = false;
   var openRowMenu = null;
   var rowMenuPos = null;
   var currentTheme = 'light';
@@ -161,8 +162,10 @@
   // ninguno existe simplemente no hace nada — nunca interrumpe al usuario ni
   // abre un cliente de correo por su cuenta, porque esto corre automático
   // (no a partir de un clic explícito de "enviar").
+  var lastEmailError = null; // motivo del último envío fallido (se muestra en Notificaciones)
   async function sendEmailBestEffort(toList, subject, text, html){
     var to = toList.join(', ');
+    lastEmailError = null;
     try{
       var apiResp = await fetch('/api/send-email', {
         method: 'POST',
@@ -170,6 +173,14 @@
         body: JSON.stringify({ to: to, subject: subject, text: text, html: html })
       });
       if(apiResp.ok) return true;
+      // Un fallo acá antes se perdía sin rastro (p.ej. 403 recipient_not_allowed
+      // cuando el destinatario no estaba en la lista blanca del endpoint).
+      lastEmailError = 'HTTP ' + apiResp.status;
+      try{
+        var errData = await apiResp.json();
+        if(errData && errData.error) lastEmailError = errData.error + (errData.blocked ? ' ('+errData.blocked.join(', ')+')' : '');
+      }catch(e2){}
+      console.error('send-email fallo:', lastEmailError);
     }catch(e){ /* backend no disponible en este hosting, seguimos abajo */ }
     if(mcpCap){
       try{
@@ -180,7 +191,7 @@
     return false;
   }
 
-  function notifyNewRequest(r){
+  async function notifyNewRequest(r){
     var recipients = (STATE.settings.notifyEmails||[])
       .map(function(n){ return (n.email||'').trim(); })
       .filter(function(e){ return e && e.indexOf('@')>-1; });
@@ -225,7 +236,18 @@
       '</p>' +
       '<p style="color:#888;font-size:12px">Si no tienes sesión iniciada en el portal, primero te pedirá el usuario y contraseña del panel y luego te lleva igual a esta solicitud.</p>' +
       '</div>';
-    sendEmailBestEffort(recipients, subject, text, html);
+    // Guardamos el resultado en la propia solicitud para que el admin pueda
+    // ver si el aviso salió o no (pestaña Notificaciones), en vez de que un
+    // rechazo del endpoint desaparezca sin que nadie se entere.
+    var ok = await sendEmailBestEffort(recipients, subject, text, html);
+    commit(function(s){
+      var target = s.requests.find(function(x){ return x.id===r.id; });
+      if(!target) return;
+      target.notifyEmailSent = ok;
+      target.notifyEmailTo = recipients.join(', ');
+      target.notifyEmailError = ok ? null : (lastEmailError || 'sin_backend');
+    });
+    return ok;
   }
 
   function reqTotal(r){ return Number(r.price||0) * Number(r.quantity||1); }
@@ -1117,7 +1139,13 @@
       '</tr>';
     }).join('');
 
+    // Última solicitud cuyo aviso falló: sin esto, un rechazo del envío
+    // (destinatario no permitido, Gmail caído) pasaba inadvertido.
+    var failed = STATE.requests.filter(function(r){ return r.notifyEmailSent === false; })
+      .sort(function(a,b){ return new Date(b.requestedAt)-new Date(a.requestedAt); })[0];
+
     return '<div class="section-head"><h2>Notificaciones</h2><p>Elige a quién le llega el aviso automático por correo cuando un cliente registra una nueva solicitud de licencia. El correo incluye un botón para revisar y aprobar la solicitud directamente, sin tener que buscarla manualmente en el panel.</p></div>' +
+    (failed ? '<div class="login-error" style="margin-bottom:1rem">El último aviso no se pudo enviar ('+esc(failed.notifyEmailError||'motivo desconocido')+') para la solicitud de '+esc(failed.clientName)+'. Revisa los destinatarios y usa "Enviar prueba".</div>' : '') +
     '<div class="grid-2">' +
       '<div class="card card-pad">' +
         '<div class="card-title">Añadir destinatario</div>' +
@@ -1126,6 +1154,10 @@
           '<div class="field"><label>Correo</label><input name="email" type="email" placeholder="wilmer@moventiglobal.com" required /></div>' +
           '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Añadir</button>' +
         '</form>' +
+        '<hr style="border:none;border-top:1px solid var(--border);margin:1.1rem 0" />' +
+        '<div class="card-title" style="font-size:.92rem">Verificar</div>' +
+        '<p style="color:var(--ink-muted);font-size:.84rem;margin-bottom:.7rem">Manda un correo de prueba a los destinatarios de arriba para confirmar que llegan los avisos.</p>' +
+        '<button class="btn btn-subtle btn-sm" onclick="App.sendTestNotify()" '+(notifyTestBusy?'disabled':'')+'>'+(notifyTestBusy?'Enviando…':'Enviar prueba')+'</button>' +
       '</div>' +
       '<div class="card">' +
         (list.length===0 ? '<div class="table-empty">No hay destinatarios configurados. Mientras tanto se usa un correo predeterminado del sistema.</div>' :
@@ -1558,6 +1590,25 @@
     },
     closeRowMenu: function(){ openRowMenu = null; rowMenuPos = null; render(); },
 
+    sendTestNotify: async function(){
+      var recipients = (STATE.settings.notifyEmails||[])
+        .map(function(n){ return (n.email||'').trim(); })
+        .filter(function(e){ return e && e.indexOf('@')>-1; });
+      if(!recipients.length) recipients = NEW_REQUEST_NOTIFY_EMAILS;
+      notifyTestBusy = true; render();
+      var ok = await sendEmailBestEffort(
+        recipients,
+        'Prueba de aviso — Portal de licencias Moventi',
+        'Este es un correo de prueba del portal de licencias. Si lo recibes, los avisos de nueva solicitud llegarán a esta dirección.',
+        '<div style="font-family:Arial,sans-serif;font-size:14px"><p>Este es un correo de prueba del portal de licencias.</p>' +
+        '<p>Si lo recibes, los avisos de nueva solicitud llegarán a esta dirección con su botón para revisar y aprobar.</p>' +
+        '<p style="margin-top:18px"><a href="' + window.location.origin + '/admin" target="_blank" rel="noopener" style="display:inline-block;background:#4f46e5;color:#ffffff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px">Abrir el panel</a></p></div>'
+      );
+      notifyTestBusy = false; render();
+      showToast(ok
+        ? 'Correo de prueba enviado a: ' + recipients.join(', ')
+        : 'No se pudo enviar la prueba (' + (lastEmailError||'sin backend') + ').', ok ? 'success' : 'error');
+    },
     addNotifyEmail: function(ev){
       ev.preventDefault();
       var f = ev.target;
