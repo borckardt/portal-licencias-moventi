@@ -907,6 +907,7 @@
     if(solFilter.proyecto!=='todos') list = list.filter(function(r){ return r.project===solFilter.proyecto; });
 
     var pendingIngram = STATE.requests.filter(function(r){ return r.status==='aprobado' && !r.notifiedToIngram; });
+    var programadas = pendingIngram.filter(function(r){ return r.scheduledSend; });
 
     var allTypes = STATE.licenseTypes;
     var rows = list.map(function(r){
@@ -935,6 +936,11 @@
       if(r.status==='pendiente'){
         menuItems.push({label:'Rechazar', cls:'rm-danger', onclick:"App.reviewRequest('"+r.id+"','rechazado')"});
       }
+      // Envío programado: se dispara solo en la fecha de activación.
+      if(r.status==='aprobado' && !r.notifiedToIngram){
+        if(r.scheduledSend) menuItems.push({label:'Cancelar programación', onclick:"App.unscheduleSend('"+r.id+"')"});
+        else if(r.neededFrom) menuItems.push({label:'Programar envío ('+fmtDateShort(r.neededFrom)+')', onclick:"App.scheduleSend('"+r.id+"')"});
+      }
       menuItems.push({label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"});
       menuItems.push({label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"});
       var actions = (r.status==='pendiente'
@@ -947,7 +953,9 @@
       var notified = r.status!=='aprobado' ? '<span style="color:var(--ink-subtle)">—</span>'
         : (r.notifiedToIngram
           ? '<span class="pill status-enviado">Enviado</span>'
-          : '<span class="pill status-sinenviar">Pendiente</span>');
+          : r.scheduledSend
+            ? '<span class="pill status-programado" title="Se enviará solo el '+fmtDateShort(r.scheduledSend)+'">Programado '+fmtDateShort(r.scheduledSend)+'</span>'
+            : '<span class="pill status-sinenviar">Pendiente</span>');
       return '<tr id="req-row-'+r.id+'" class="'+(r.id===highlightRequestId?'row-highlight':'')+'">' +
         '<td>'+checkbox+'</td>' +
         '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
@@ -980,8 +988,11 @@
     '<div class="ingram-bar">' +
       '<button class="btn btn-subtle btn-sm" onclick="App.selectAllPendingIngram()" '+(pendingIngram.length===0?'disabled':'')+'>Seleccionar aprobadas sin enviar ('+pendingIngram.length+')</button>' +
       '<span class="count">'+selectedForIngram.size+' seleccionada'+(selectedForIngram.size===1?'':'s')+'</span>' +
-      '<button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="App.sendToIngram()" '+(selectedForIngram.size===0?'disabled':'')+'>Enviar solicitud por correo</button>' +
+      (programadas.length ? '<span class="count">'+programadas.length+' programada'+(programadas.length===1?'':'s')+'</span>' : '') +
+      '<button class="btn btn-subtle btn-sm" style="margin-left:auto" onclick="App.scheduleSelected()" '+(selectedForIngram.size===0?'disabled':'')+'>Programar envío</button>' +
+      '<button class="btn btn-primary btn-sm" onclick="App.sendToIngram()" '+(selectedForIngram.size===0?'disabled':'')+'>Enviar solicitud por correo</button>' +
     '</div>' +
+    '<p class="hint">El envío programado sale automáticamente el día de la fecha de activación de cada solicitud, sin que tengas que volver a entrar.</p>' +
     '<div class="toolbar">' +
       '<div class="field"><label>Cliente</label><select onchange="App.setSolFilter(\'cliente\', this.value)">' +
         '<option value="todos">Todos</option>' + clients.map(function(c){ return '<option value="'+c.username+'" '+(solFilter.cliente===c.username?'selected':'')+'>'+esc(c.name)+'</option>'; }).join('') +
@@ -1736,6 +1747,63 @@
     selectAllPendingIngram: function(){
       STATE.requests.forEach(function(r){ if(r.status==='aprobado' && !r.notifiedToIngram) selectedForIngram.add(r.id); });
       render();
+    },
+    // Envío programado: marca la solicitud para que el cron diario
+    // (api/run-scheduled.js) la envíe el día de su fecha de activación.
+    scheduleSend: function(id){
+      var r = STATE.requests.find(function(x){ return x.id===id; });
+      if(!r || !r.neededFrom){ showToast('La solicitud no tiene fecha de activación.', 'error'); return; }
+      var admin = currentUser();
+      askConfirm({
+        titulo: '¿Programar el envío de esta solicitud?',
+        mensaje: 'El correo a ' + ((STATE.settings.ingramEmail||'').trim() || 'el contacto configurado') +
+          ' se enviará automáticamente el ' + fmtDateShort(r.neededFrom) + '.',
+        etiquetaOk: 'Sí, programar',
+        onOk: async function(){
+          var ok = await commitSynced(function(s){
+            var t = s.requests.find(function(x){ return x.id===id; });
+            if(t){ t.scheduledSend = t.neededFrom; t.scheduledAt = new Date().toISOString(); t.scheduledBy = admin ? admin.name : null; }
+          });
+          render();
+          showToast(ok ? 'Envío programado para el ' + fmtDateShort(r.neededFrom) + '.' : 'Se programó localmente, pero no se pudo sincronizar. Reintenta.', ok ? 'success' : 'error');
+        }
+      });
+    },
+    unscheduleSend: async function(id){
+      var ok = await commitSynced(function(s){
+        var t = s.requests.find(function(x){ return x.id===id; });
+        if(t){ t.scheduledSend = null; t.scheduledAt = null; t.scheduledBy = null; }
+      });
+      render();
+      showToast(ok ? 'Programación cancelada.' : 'No se pudo sincronizar la cancelación. Reintenta.', ok ? 'success' : 'error');
+    },
+    scheduleSelected: function(){
+      var ids = Array.from(selectedForIngram);
+      var items = STATE.requests.filter(function(r){
+        return ids.indexOf(r.id)>-1 && r.status==='aprobado' && !r.notifiedToIngram && r.neededFrom;
+      });
+      if(items.length===0){ showToast('Selecciona solicitudes aprobadas con fecha de activación.', 'error'); return; }
+      var admin = currentUser();
+      askConfirm({
+        titulo: '¿Programar el envío de ' + items.length + ' solicitud' + (items.length===1?'':'es') + '?',
+        mensaje: 'Cada una se enviará automáticamente el día de su fecha de activación.',
+        detalle: '<ul style="margin:.5rem 0 0;padding-left:1.1rem">' + items.map(function(r){
+          return '<li>' + esc(r.licenseTypeName) + ' — ' + esc(r.clientName) + ' · ' + fmtDateShort(r.neededFrom) + '</li>';
+        }).join('') + '</ul>',
+        etiquetaOk: 'Sí, programar',
+        onOk: async function(){
+          var ok = await commitSynced(function(s){
+            s.requests.forEach(function(r){
+              if(ids.indexOf(r.id)>-1 && r.status==='aprobado' && !r.notifiedToIngram && r.neededFrom){
+                r.scheduledSend = r.neededFrom; r.scheduledAt = new Date().toISOString(); r.scheduledBy = admin ? admin.name : null;
+              }
+            });
+          });
+          selectedForIngram.clear();
+          render();
+          showToast(ok ? items.length + ' envío(s) programado(s).' : 'Se programó localmente, pero no se pudo sincronizar. Reintenta.', ok ? 'success' : 'error');
+        }
+      });
     },
     // Pide confirmación antes de enviar (evita clics accidentales); el envío
     // real vive en doSendToIngram.

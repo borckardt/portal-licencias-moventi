@@ -157,6 +157,7 @@
   .status-bloqueado{ background:var(--danger-bg); color:var(--danger); }
   .status-enviado{ background:var(--teal-soft); color:var(--teal); }
   .status-sinenviar{ background:var(--surface-alt); color:var(--ink-subtle); }
+  .status-programado{ background:var(--warning-bg); color:var(--warning); text-transform:none; }
 
   table{ width:100%; border-collapse:collapse; }
   th{ text-align:left; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-subtle); font-weight:700; padding:.7em .9em; border-bottom:1px solid var(--border); white-space:nowrap; }

@@ -1,6 +1,9 @@
 {
   "cleanUrls": true,
   "trailingSlash": false,
+  "crons": [
+    { "path": "/api/run-scheduled", "schedule": "0 13 * * *" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
