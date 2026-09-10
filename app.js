@@ -956,7 +956,7 @@
           : r.scheduledSend
             ? '<span class="pill status-programado" title="Se enviará solo el '+fmtDateShort(r.scheduledSend)+'">Programado '+fmtDateShort(r.scheduledSend)+'</span>'
             : '<span class="pill status-sinenviar">Pendiente</span>');
-      return '<tr id="req-row-'+r.id+'" class="'+(r.id===highlightRequestId?'row-highlight':'')+'">' +
+      return '<tr id="req-row-'+r.id+'">' +
         '<td>'+checkbox+'</td>' +
         '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
         '<td class="wrap">'+esc(r.clientName)+'</td>' +
