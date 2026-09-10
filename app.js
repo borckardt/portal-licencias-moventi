@@ -61,6 +61,7 @@
   var editingRequestId = null;
   var editingClientId = null;
   var notifyTestBusy = false;
+  var clientFilterProject = 'todos';
   var confirmDialog = null; // {titulo, mensaje, detalle, etiquetaOk, onOk}
   var openRowMenu = null;
   var rowMenuPos = null;
@@ -256,7 +257,8 @@
 
   function reqTotal(r){ return Number(r.price||0) * Number(r.quantity||1); }
   function fmtDate(iso){ if(!iso) return '—'; var d = new Date(iso); return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'}); }
-  function fmtDateShort(ymd){ if(!ymd) return '—'; var p = ymd.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
+  // Acepta 'YYYY-MM-DD' y también un ISO con hora ('...T10:00:00.000Z').
+  function fmtDateShort(ymd){ if(!ymd) return '—'; var p = String(ymd).slice(0,10).split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
   function todayYmd(){ var d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
   function dateOnly(iso){ if(!iso) return null; return iso.slice(0,10); }
 
@@ -774,19 +776,39 @@
       .sort(function(a,b){ return new Date(b.requestedAt)-new Date(a.requestedAt); });
     var activeTypes = STATE.licenseTypes.filter(function(t){ return t.active; });
 
-    var rows = myReqs.map(function(r){
+    // Proyectos que el cliente realmente usó (no toda la lista global).
+    var misProyectos = [];
+    myReqs.forEach(function(r){ if(r.project && misProyectos.indexOf(r.project)===-1) misProyectos.push(r.project); });
+    misProyectos.sort();
+    if(clientFilterProject!=='todos' && misProyectos.indexOf(clientFilterProject)===-1) clientFilterProject = 'todos';
+    var visibles = clientFilterProject==='todos'
+      ? myReqs
+      : myReqs.filter(function(r){ return r.project===clientFilterProject; });
+
+    // El comentario va como línea secundaria bajo el tipo: así la tabla entra
+    // completa en la columna sin barra de desplazamiento.
+    var rows = visibles.map(function(r){
       return '<tr>' +
-        '<td>'+esc(r.licenseTypeName)+'</td>' +
+        '<td class="lt-name">'+esc(r.licenseTypeName)+
+          (r.note ? '<div class="cell-note" title="'+esc(r.note)+'">'+esc(r.note)+'</div>' : '')+'</td>' +
         '<td style="color:var(--ink-subtle)">'+esc(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
-        '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
-        '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
-        '<td class="num">'+money(reqTotal(r))+'</td>' +
+        '<td class="num cell-money">'+money(reqTotal(r))+'</td>' +
         '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
-        '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
-        '<td style="color:var(--ink-muted)">'+esc(r.note||'—')+'</td>' +
+        '<td class="num cell-date">'+fmtDateShort(r.requestedAt)+'</td>' +
+        '<td class="num cell-date">'+fmtDateShort(r.neededFrom)+'</td>' +
+        '<td class="num cell-date">'+(r.reviewedAt ? fmtDateShort(r.reviewedAt) : '—')+'</td>' +
       '</tr>';
     }).join('');
+
+    var filtroProyecto = misProyectos.length>1
+      ? '<div class="field" style="max-width:230px"><label>Proyecto</label><select onchange="App.setClientProject(this.value)">' +
+          '<option value="todos"'+(clientFilterProject==='todos'?' selected':'')+'>Todos</option>' +
+          misProyectos.map(function(p){
+            return '<option value="'+esc(p)+'"'+(clientFilterProject===p?' selected':'')+'>'+esc(p)+'</option>';
+          }).join('') +
+        '</select></div>'
+      : '';
 
     var options = activeTypes.map(function(t){
       return '<option value="'+t.id+'">'+esc(t.name)+' — '+money(t.price)+'</option>';
@@ -795,9 +817,9 @@
 
     return topbar(user, 'Cliente') +
     '<div class="app-body">' +
-      '<div class="main-area" style="max-width:1000px">' +
+      '<div class="main-area">' +
         '<div class="section-head"><h2>Hola, '+esc(user.name)+'</h2><p>Registra nuevas solicitudes de licencia y revisa el estado de las anteriores.</p></div>' +
-        '<div class="stack">' +
+        '<div class="grid-2 grid-client">' +
           '<div class="card card-pad">' +
             '<div class="card-title">Nueva solicitud de licencia</div>' +
             (activeTypes.length===0
@@ -818,9 +840,15 @@
               '</form>') +
           '</div>' +
           '<div class="card card-pad">' +
-            '<div class="card-title">Mis solicitudes<span style="font-weight:500;color:var(--ink-muted);font-size:.8rem">'+myReqs.length+' registradas</span></div>' +
+            '<div class="card-title">Mis solicitudes<span style="font-weight:500;color:var(--ink-muted);font-size:.8rem">'+
+              (clientFilterProject==='todos' ? myReqs.length+' registradas' : visibles.length+' de '+myReqs.length)+'</span></div>' +
+            filtroProyecto +
             (myReqs.length===0 ? '<div class="table-empty">Aún no registras solicitudes.</div>' :
-            '<div class="table-wrap"><table><thead><tr><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Necesaria desde</th><th>Fecha solicitada</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Comentario</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+             visibles.length===0 ? '<div class="table-empty">No hay solicitudes de este proyecto.</div>' :
+            '<div class="table-fit"><table class="table-client"><thead><tr>' +
+              '<th>Tipo</th><th>Proyecto</th><th>Cant.</th><th>Precio</th><th>Estado</th>' +
+              '<th>Solicitada</th><th>Necesaria</th><th>Autorizada</th>' +
+            '</tr></thead><tbody>'+rows+'</tbody></table></div>') +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -1631,6 +1659,7 @@
     },
     closeRowMenu: function(){ openRowMenu = null; rowMenuPos = null; render(); },
 
+    setClientProject: function(v){ clientFilterProject = v; render(); },
     cancelConfirm: function(){
       confirmDialog = null;
       render();

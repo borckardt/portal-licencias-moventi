@@ -170,6 +170,31 @@
   .table-dense td{ padding:.65em .65em; font-size:.83rem; white-space:nowrap; }
   .table-dense td.wrap{ white-space:normal; max-width:170px; }
   .table-empty{ padding:2.5em 1em; text-align:center; color:var(--ink-subtle); font-size:.9rem; }
+
+  /* ---------- tabla de "Mis solicitudes" (vista cliente) ----------
+     Entra completa en su columna: sin paginación y sin barra visible, con el
+     precio y las fechas en una sola línea. */
+  .table-fit{ overflow-x:auto; max-width:100%; scrollbar-width:none; -ms-overflow-style:none; }
+  .table-fit::-webkit-scrollbar{ display:none; height:0; }
+  .table-client{ table-layout:auto; }
+  .table-client th{ padding:.5em .38em; font-size:.63rem; letter-spacing:.02em; }
+  .table-client td{ padding:.6em .38em; font-size:.79rem; }
+  .table-client .cell-money, .table-client .cell-date{ white-space:nowrap; }
+  .table-client .lt-name{ font-weight:600; min-width:10em; }
+  .table-client .cell-note{
+    font-weight:400; font-size:.72rem; color:var(--ink-subtle); margin-top:.15em;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+  }
+  .table-client .pill{ padding:.25em .55em; font-size:.66rem; }
+  /* Sin min-width:0 la tabla impone su ancho mínimo a la columna del grid y
+     estira la página entera; así el desborde queda dentro de .table-fit. */
+  /* La tabla necesita más ancho que el formulario, así entra sin desplazarse. */
+  .grid-2.grid-client{ align-items:start; grid-template-columns:1fr 1.75fr; }
+  /* Debajo de ~1400px la tabla no cabe junto al formulario: pasa a una sola
+     columna y usa todo el ancho, así nunca aparece un desplazador. */
+  @media (max-width:1400px){ .grid-2.grid-client{ grid-template-columns:1fr; } }
+  .grid-client > *{ min-width:0; }
+  .table-fit{ min-width:0; }
   /* Fila resaltada al llegar desde el botón "Revisar y aprobar solicitud"
      del correo de aviso (ver ?verSolicitud=... en app.js). */
   tr.row-highlight td{ background:var(--warning-bg); box-shadow: inset 0 0 0 1px var(--warning); }
@@ -297,6 +322,16 @@
   .topbar-right{ display:flex; align-items:center; gap:1rem; }
   .role-chip{ font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:.3em .7em; border-radius:99px; background:var(--accent-soft); color:var(--accent); }
   .user-name{ font-weight:600; font-size:.88rem; }
+  /* En pantallas angostas la barra superior desbordaba y hacía scrollear la
+     página entera; se envuelve y se ocultan los datos secundarios. */
+  @media (max-width:700px){
+    .topbar{ flex-wrap:wrap; gap:.6rem .8rem; padding:.8rem 1rem; }
+    .topbar-right{ gap:.6rem; flex-wrap:wrap; }
+    .topbar-right .theme-toggle span{ display:none; }
+  }
+  @media (max-width:480px){
+    .topbar-right .user-name{ display:none; }
+  }
   .app-body{ flex:1; display:flex; }
 
   .side-nav{ width:220px; flex-shrink:0; background:var(--surface); border-right:1px solid var(--border); padding:1.2rem .8rem; }
