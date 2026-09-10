@@ -1640,6 +1640,8 @@
         var r = s.requests.find(function(x){ return x.id===id; });
         if(!r) return;
         r.quantity = qty;
+        // Si el envío estaba programado, sigue la nueva fecha de activación.
+        if(r.scheduledSend && !r.notifiedToIngram) r.scheduledSend = neededFrom;
         r.neededFrom = neededFrom;
         if(type){ r.licenseTypeId = type.id; r.licenseTypeName = type.name; r.price = type.price; }
         if(projectEl) r.project = projectEl.value;
