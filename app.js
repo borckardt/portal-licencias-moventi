@@ -312,6 +312,7 @@
   // Estados: pendiente > aprobado > en proceso (pedida al distribuidor) > activado.
   var ESTADOS = ['pendiente','aprobado','en proceso','activado','rechazado'];
   function statusCls(st){ return 'status-' + String(st||'').replace(/\s+/g,''); }
+  function puedeEnviarse(r){ return (r.status==='pendiente' || r.status==='aprobado') && !r.notifiedToIngram; }
   function esAprobada(r){ return r.status==='aprobado' || r.status==='en proceso' || r.status==='activado'; }
   // Prorrateo del mes de activación: del día de activación al fin de mes,
   // sobre los días reales del mes (28/29/30/31).
@@ -998,7 +999,7 @@
     if(solFilter.estado!=='todos') list = list.filter(function(r){ return r.status===solFilter.estado; });
     if(solFilter.proyecto!=='todos') list = list.filter(function(r){ return r.project===solFilter.proyecto; });
 
-    var pendingIngram = STATE.requests.filter(function(r){ return r.status==='aprobado' && !r.notifiedToIngram; });
+    var pendingIngram = STATE.requests.filter(puedeEnviarse);
     var programadas = pendingIngram.filter(function(r){ return r.scheduledSend; });
 
     var allTypes = STATE.licenseTypes;
@@ -1029,25 +1030,21 @@
       if(r.status==='pendiente'){
         menuItems.push({label:'Rechazar', cls:'rm-danger', onclick:"App.reviewRequest('"+r.id+"','rechazado')"});
       }
-      // Activación: el operador la marca cuando el distribuidor confirma.
-      if(r.status==='en proceso'){
-        menuItems.push({label:'Marcar como activada', onclick:"App.markActivated('"+r.id+"')"});
-      }
       // Envío programado: se dispara solo en la fecha de activación.
-      if(r.status==='aprobado' && !r.notifiedToIngram){
+      if(puedeEnviarse(r)){
         if(r.scheduledSend) menuItems.push({label:'Cancelar programación', onclick:"App.unscheduleSend('"+r.id+"')"});
         else if(r.neededFrom) menuItems.push({label:'Programar envío ('+fmtDateShort(r.neededFrom)+')', onclick:"App.scheduleSend('"+r.id+"')"});
       }
       menuItems.push({label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"});
       menuItems.push({label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"});
-      var actions = (r.status==='pendiente'
-        ? '<button class="btn btn-success btn-sm" onclick="App.reviewRequest(\''+r.id+'\',\'aprobado\')">Aprobar</button> '
-        : '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.reviewedBy||'')+'</span> ') +
+      var actions = (r.status==='en proceso'
+        ? '<button class="btn btn-success btn-sm" onclick="App.markActivated(\''+r.id+'\')">Notificar activación</button> '
+        : '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.activatedBy||r.notifiedBy||'')+'</span> ') +
         buildRowMenu(r.id, menuItems);
-      var checkbox = r.status==='aprobado'
+      var checkbox = puedeEnviarse(r)
         ? '<input type="checkbox" '+(selectedForIngram.has(r.id)?'checked':'')+' onchange="App.toggleIngramSelect(\''+r.id+'\', this.checked)" />'
         : '';
-      var notified = r.status!=='aprobado' ? '<span style="color:var(--ink-subtle)">—</span>'
+      var notified = r.status==='rechazado' ? '<span style="color:var(--ink-subtle)">—</span>'
         : (r.notifiedToIngram
           ? '<span class="pill status-enviado">Enviado</span>'
           : r.scheduledSend
@@ -1084,7 +1081,7 @@
         : '') +
     '</div>' +
     '<div class="ingram-bar">' +
-      '<button class="btn btn-subtle btn-sm" onclick="App.selectAllPendingIngram()" '+(pendingIngram.length===0?'disabled':'')+'>Seleccionar aprobadas sin enviar ('+pendingIngram.length+')</button>' +
+      '<button class="btn btn-subtle btn-sm" onclick="App.selectAllPendingIngram()" '+(pendingIngram.length===0?'disabled':'')+'>Seleccionar sin enviar ('+pendingIngram.length+')</button>' +
       '<span class="count">'+selectedForIngram.size+' seleccionada'+(selectedForIngram.size===1?'':'s')+'</span>' +
       (programadas.length ? '<span class="count">'+programadas.length+' programada'+(programadas.length===1?'':'s')+'</span>' : '') +
       '<button class="btn btn-subtle btn-sm" style="margin-left:auto" onclick="App.scheduleSelected()" '+(selectedForIngram.size===0?'disabled':'')+'>Programar envío</button>' +
@@ -1886,7 +1883,7 @@
       render();
     },
     selectAllPendingIngram: function(){
-      STATE.requests.forEach(function(r){ if(r.status==='aprobado' && !r.notifiedToIngram) selectedForIngram.add(r.id); });
+      STATE.requests.forEach(function(r){ if(puedeEnviarse(r)) selectedForIngram.add(r.id); });
       render();
     },
     // Paso final: el operador confirma que el distribuidor activó la
@@ -1951,7 +1948,7 @@
     scheduleSelected: function(){
       var ids = Array.from(selectedForIngram);
       var items = STATE.requests.filter(function(r){
-        return ids.indexOf(r.id)>-1 && r.status==='aprobado' && !r.notifiedToIngram && r.neededFrom;
+        return ids.indexOf(r.id)>-1 && puedeEnviarse(r) && r.neededFrom;
       });
       if(items.length===0){ showToast('Selecciona solicitudes aprobadas con fecha de activación.', 'error'); return; }
       var admin = currentUser();
@@ -1965,7 +1962,7 @@
         onOk: async function(){
           var ok = await commitSynced(function(s){
             s.requests.forEach(function(r){
-              if(ids.indexOf(r.id)>-1 && r.status==='aprobado' && !r.notifiedToIngram && r.neededFrom){
+              if(ids.indexOf(r.id)>-1 && puedeEnviarse(r) && r.neededFrom){
                 r.scheduledSend = r.neededFrom; r.scheduledAt = new Date().toISOString(); r.scheduledBy = admin ? admin.name : null;
               }
             });
@@ -1982,8 +1979,8 @@
       var ingramEmail = (STATE.settings.ingramEmail||'').trim();
       if(!ingramEmail){ showToast('Configura primero el correo de contacto para el envío.', 'error'); return; }
       var ids = Array.from(selectedForIngram);
-      var items = STATE.requests.filter(function(r){ return ids.indexOf(r.id)>-1 && r.status==='aprobado'; });
-      if(items.length===0){ showToast('Selecciona al menos una solicitud aprobada.', 'error'); return; }
+      var items = STATE.requests.filter(function(r){ return ids.indexOf(r.id)>-1 && puedeEnviarse(r); });
+      if(items.length===0){ showToast('Selecciona al menos una solicitud sin enviar.', 'error'); return; }
       var ccList = parseEmailList(STATE.settings.ingramCc);
       askConfirm({
         titulo: '¿Seguro que deseas enviar por correo la solicitud de creación?',
@@ -2004,8 +2001,8 @@
       var ingramEmail = (STATE.settings.ingramEmail||'').trim();
       var ccList = parseEmailList(STATE.settings.ingramCc);
       var ids = Array.from(selectedForIngram);
-      var items = STATE.requests.filter(function(r){ return ids.indexOf(r.id)>-1 && r.status==='aprobado'; });
-      if(items.length===0){ showToast('Selecciona al menos una solicitud aprobada.', 'error'); return; }
+      var items = STATE.requests.filter(function(r){ return ids.indexOf(r.id)>-1 && puedeEnviarse(r); });
+      if(items.length===0){ showToast('Selecciona al menos una solicitud sin enviar.', 'error'); return; }
 
       var admin = currentUser();
       var detalle = items.map(function(r){
@@ -2048,7 +2045,7 @@
           if(apiResp.ok){
             commit(function(s){
               s.requests.forEach(function(r){
-                if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
+                if(ids.indexOf(r.id)>-1 && puedeEnviarse(r)){
                   r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null; r.status = 'en proceso';
                 }
               });
@@ -2069,7 +2066,7 @@
         window.location.href = mailto;
         commit(function(s){
           s.requests.forEach(function(r){
-            if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
+            if(ids.indexOf(r.id)>-1 && puedeEnviarse(r)){
               r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null; r.status = 'en proceso';
             }
           });
@@ -2084,7 +2081,7 @@
         var result = await mcpCap.callTool('Gmail', 'send_message', { to: [ingramEmail], cc: ccList, subject: subject, body: body, htmlBody: htmlBody });
         commit(function(s){
           s.requests.forEach(function(r){
-            if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
+            if(ids.indexOf(r.id)>-1 && puedeEnviarse(r)){
               r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null; r.status = 'en proceso';
             }
           });
