@@ -471,11 +471,16 @@
   // desde la fecha de activación (o la requerida, si aún no se activa) hasta
   // el cierre de ese mes. No se cobra el mes completo si la licencia se pide
   // a mitad de mes.
+  // Solo aplica mientras ese mes sigue vigente (mes/año actual): un mes ya
+  // vencido (ej. agosto cuando ya estamos en septiembre) se cobra completo,
+  // porque el prorrateo ya no tiene sentido una vez que el mes cerró.
   function prorrateo(r){
     if(!esAprobada(r)) return null;
     var ymd = String(r.activatedAt || r.neededFrom || '').slice(0,10);
     var p = ymd.split('-'); if(p.length!==3) return null;
     var anio = +p[0], mes = +p[1], dia = +p[2];
+    var hoy = new Date();
+    if(anio!==hoy.getFullYear() || mes!==(hoy.getMonth()+1)) return null;
     var diasMes = new Date(anio, mes, 0).getDate();
     var restantes = diasMes - dia + 1;
     var unitario = Number(r.price||0) / 30 * restantes;
