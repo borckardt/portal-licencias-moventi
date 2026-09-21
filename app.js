@@ -1189,7 +1189,7 @@
         var projectOptionsEdit = projectOptionsHtml(projectNames(false, r.project), r.project);
         return '<tr class="editing-row" id="req-row-'+r.id+'">' +
           '<td></td>' +
-          '<td class="num">'+fmtDateShort(r.requestedAt)+'</td>' +
+          '<td class="num"><input class="mini-input" id="edit-reqdate-'+r.id+'" type="date" value="'+(dateOnly(r.requestedAt)||'')+'" /></td>' +
           '<td class="wrap">'+clipCell(r.clientName)+'</td>' +
           '<td class="wrap"><select class="mini-select" id="edit-type-'+r.id+'">'+typeOptions+'</select></td>' +
           '<td class="wrap"><select class="mini-select" id="edit-project-'+r.id+'">'+projectOptionsEdit+'</select></td>' +
@@ -1197,7 +1197,7 @@
           '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
           '<td class="num">'+money(reqTotal(r))+'</td>' +
           '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
-          '<td class="num">'+(r.activatedAt ? fmtDateShort(r.activatedAt) : '—')+'</td>' +
+          '<td class="num"><input class="mini-input" id="edit-actdate-'+r.id+'" type="date" value="'+(dateOnly(r.activatedAt)||'')+'" /></td>' +
           '<td>—</td>' +
           '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
         '</tr>';
@@ -1617,7 +1617,7 @@
         var typeOptionsR = allTypesReporte.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
         var projectOptionsR = projectOptionsHtml(projectNames(false, r.project), r.project);
         return '<tr class="editing-row">' +
-          '<td class="num">'+fmtDateShort(r.requestedAt)+'</td>' +
+          '<td class="num"><input class="mini-input" id="edit-reqdate-'+r.id+'" type="date" value="'+(dateOnly(r.requestedAt)||'')+'" /></td>' +
           '<td class="wrap">'+clipCell(r.clientName)+'</td>' +
           '<td class="wrap"><select class="mini-select" id="edit-type-'+r.id+'">'+typeOptionsR+'</select></td>' +
           '<td class="wrap"><select class="mini-select" id="edit-project-'+r.id+'">'+projectOptionsR+'</select></td>' +
@@ -1626,7 +1626,7 @@
           '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
           '<td class="num">'+precioUnitCell(r)+'</td>' +
           '<td class="num">'+money(montoTotal(r))+'</td>' +
-          '<td class="num">'+activadaCell(r)+'</td>' +
+          '<td class="num"><input class="mini-input" id="edit-actdate-'+r.id+'" type="date" value="'+(dateOnly(r.activatedAt)||'')+'" /></td>' +
           '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
         '</tr>';
       }
@@ -1979,10 +1979,15 @@
       var typeEl = document.getElementById('edit-type-'+id);
       var qtyEl = document.getElementById('edit-qty-'+id);
       var dateEl = document.getElementById('edit-date-'+id);
+      var reqDateEl = document.getElementById('edit-reqdate-'+id);
+      var actDateEl = document.getElementById('edit-actdate-'+id);
       var projectEl = document.getElementById('edit-project-'+id); // solo existe en la tabla de Solicitudes
       var qty = Math.max(1, parseInt(qtyEl.value, 10) || 1);
       var neededFrom = dateEl.value;
       if(!neededFrom){ showToast('Indica la fecha en que se necesita la licencia.', 'error'); return; }
+      var requestedDate = reqDateEl ? reqDateEl.value : '';
+      if(!requestedDate){ showToast('Indica la fecha de solicitud.', 'error'); return; }
+      var activatedDate = actDateEl ? actDateEl.value : '';
       var typeId = typeEl.value;
       var type = STATE.licenseTypes.find(function(t){ return t.id===typeId; });
       editingRequestId = null;
@@ -1993,6 +1998,8 @@
         // Si el envío estaba programado, sigue la nueva fecha de activación.
         if(r.scheduledSend && !r.notifiedToIngram) r.scheduledSend = neededFrom;
         r.neededFrom = neededFrom;
+        r.requestedAt = requestedDate;
+        r.activatedAt = activatedDate || null;
         if(type){ r.licenseTypeId = type.id; r.licenseTypeName = type.name; r.price = type.price; }
         if(projectEl) r.project = projectEl.value;
       });

@@ -494,4 +494,10 @@
     border:1px solid var(--border-strong); background:var(--surface); color:var(--ink);
   }
   .mini-input:focus, .mini-select:focus{ border-color:var(--accent); }
+  /* Los <input type=date> en filas de edición necesitan menos ancho mínimo
+     para que la fila no desborde la tabla al agregar varias fechas editables. */
+  .mini-input[type="date"]{ min-width:0; width:92px; font-size:.66rem; padding:.28em .12em; }
+  tr.editing-row .btn-sm{ padding:.3em .45em; font-size:.72rem; }
+  tr.editing-row td{ padding-left:.14em; padding-right:.14em; }
+  tr.editing-row .mini-select{ min-width:64px; }
   tr.editing-row{ background:var(--accent-soft); }
