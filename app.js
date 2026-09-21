@@ -224,14 +224,14 @@
       '- Tipo: ' + r.licenseTypeName + '\n' +
       '- Proyecto: ' + (r.project||'—') + '\n' +
       '- Cantidad: ' + (r.quantity||1) + '\n' +
-      '- Fecha de Activación: ' + fmtDateShort(r.neededFrom) + '\n' +
+      '- Fecha requerida: ' + fmtDateShort(r.neededFrom) + '\n' +
       (r.note ? ('- Nota del cliente: ' + r.note + '\n') : '') +
       '\nRevisar y aprobar directamente: ' + approveUrl + '\n' +
       '\n(Si no tienes sesión iniciada, primero te pedirá el login del panel y luego te lleva igual a esta solicitud.)';
     var html = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
       '<p>Se registró una nueva solicitud de licencia:</p>' +
       '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
-      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Fecha de Activación</th></tr>' +
+      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Fecha requerida</th></tr>' +
       '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.project||'—')+'</td>' +
@@ -282,14 +282,14 @@
       '- Tipo: ' + r.licenseTypeName + '\n' +
       '- Proyecto: ' + (r.project||'—') + '\n' +
       '- Cantidad: ' + (r.quantity||1) + '\n' +
-      '- Fecha de activación solicitada: ' + fmtDateShort(r.neededFrom) + '\n' +
-      '- Activada el: ' + fmtDateShort(r.activatedAt||r.neededFrom) + '\n' +
+      '- Fecha requerida: ' + fmtDateShort(r.neededFrom) + '\n' +
+      '- Fecha de activación: ' + fmtDateShort(r.activatedAt||r.neededFrom) + '\n' +
       '\nSaludos,\nMoventi';
     var html = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
       '<p>Estimado Cliente,</p>' +
       '<p>Se le informa que el siguiente pedido de licencias ha sido generado y activado:</p>' +
       '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
-      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Fecha de Activación</th><th style="padding:6px 10px;text-align:left">Activada el</th></tr>' +
+      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Fecha requerida</th><th style="padding:6px 10px;text-align:left">Fecha de activación</th></tr>' +
       '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.project||'—')+'</td>' +
@@ -939,7 +939,7 @@
              visibles.length===0 ? '<div class="table-empty">No hay solicitudes de este proyecto.</div>' :
             '<div class="table-fit"><table class="table-client"><thead><tr>' +
               '<th>Tipo</th><th>Proyecto</th><th>Cant.</th><th>Precio</th><th>Estado</th>' +
-              '<th>Solicitada</th><th>Activación</th><th>Activada el</th>' +
+              '<th>Fecha de solicitud</th><th>Fecha requerida</th><th>Fecha de activación</th>' +
             '</tr></thead><tbody>'+rows+'</tbody></table></div>') +
           '</div>' +
         '</div>' +
@@ -1101,7 +1101,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes con estos filtros.</div>' :
-      '<div class="table-wrap no-scrollbar"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Precio</th><th>Prorrateo</th><th>Estado</th><th>Activada el</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap no-scrollbar"><table class="table-dense"><thead><tr><th></th><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Precio</th><th>Prorrateo</th><th>Estado</th><th>Fecha de activación</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -1483,7 +1483,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Estado</th><th>Precio</th><th>Prorrateo</th><th>Activada el</th><th>Gestionado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Estado</th><th>Precio</th><th>Prorrateo</th><th>Fecha de activación</th><th>Gestionado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -2006,7 +2006,7 @@
 
       var admin = currentUser();
       var detalle = items.map(function(r){
-        return '- ' + r.licenseTypeName + ' | Proyecto: ' + (r.project||'—') + ' | Cantidad: ' + (r.quantity||1) + ' | Cliente: ' + r.clientName + ' | Fecha de Activación: ' + fmtDateShort(r.neededFrom);
+        return '- ' + r.licenseTypeName + ' | Proyecto: ' + (r.project||'—') + ' | Cantidad: ' + (r.quantity||1) + ' | Cliente: ' + r.clientName + ' | Fecha requerida: ' + fmtDateShort(r.neededFrom);
       }).join('\n');
       var htmlRows = items.map(function(r){
         return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
@@ -2016,7 +2016,7 @@
           '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+fmtDateShort(r.neededFrom)+'</td></tr>';
       }).join('');
       var detalleHtml = '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
-        '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Fecha de Activación</th></tr>' +
+        '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Fecha requerida</th></tr>' +
         htmlRows + '</table>';
       var tplVars = {
         cantidad: items.length,
@@ -2277,7 +2277,7 @@
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
       function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha solicitada','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha de Activación','Estado','Precio total (US$)','Activada el','Prorrateo (US$)','Días prorrateados','Gestionado por'];
+      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio total (US$)','Fecha de activación','Prorrateo (US$)','Días prorrateados','Gestionado por'];
       var lines = [header.join(';')];
       list.forEach(function(r){
         var pr = prorrateo(r);
