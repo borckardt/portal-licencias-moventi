@@ -67,6 +67,13 @@
   var clientFilterProject = 'todos';
   var confirmDialog = null; // {titulo, mensaje, detalle, etiquetaOk, onOk}
   var openRowMenu = null;
+  // Carga de solicitudes históricas (meses pasados) para poner al día la BD.
+  var importHistOpen = false;
+  var importHistRows = null; // filas ya validadas, listas para confirmar
+  var importHistErrors = [];
+  var importHistFileName = '';
+  var importHistBusy = false;
+  var manualHistOpen = false;
   var rowMenuPos = null;
   var currentTheme = 'light';
   var forgotPasswordOpen = false;
@@ -136,6 +143,123 @@
   }
 
   function uid(prefix){ return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+
+  // ---------- Carga de histórico (solicitudes de meses pasados) ----------
+  // Busca un cliente por username o nombre; si no existe, lo crea (sin
+  // contraseña: solo sirve para que el histórico quede vinculado a alguien,
+  // si va a usar el portal se le agrega usuario/clave desde la pestaña Clientes).
+  function ensureHistClient(s, name){
+    var n = String(name||'').trim();
+    if(!n) return null;
+    var found = s.users.find(function(u){ return u.role==='client' && (u.username.toLowerCase()===n.toLowerCase() || u.name.toLowerCase()===n.toLowerCase()); });
+    if(found) return found;
+    var base = n.toUpperCase().replace(/[^A-Z0-9]+/g,'').slice(0,24) || 'CLIENTE';
+    var username = base, i = 1;
+    while(s.users.some(function(u){ return u.username===username; })){ username = base+i; i++; }
+    var nuevo = { id: uid('u'), username: username, name: n, role:'client', active:true, email:'' };
+    s.users.push(nuevo);
+    return nuevo;
+  }
+  function ensureHistLicenseType(s, name, price){
+    var n = String(name||'').trim();
+    if(!n) return null;
+    var t = s.licenseTypes.find(function(x){ return x.name.toLowerCase()===n.toLowerCase(); });
+    if(t) return t;
+    var nuevo = { id: uid('lt'), name: n, price: Number(price)||0, active:true };
+    s.licenseTypes.push(nuevo);
+    return nuevo;
+  }
+  function ensureHistProject(s, name){
+    var n = String(name||'').trim();
+    if(!n) return '';
+    if(!Array.isArray(s.projects) || !s.projects.length) s.projects = projectList().slice();
+    var p = s.projects.find(function(x){ return x.name.toLowerCase()===n.toLowerCase(); });
+    if(!p){ p = { id: uid('pj'), name:n, active:true }; s.projects.push(p); }
+    return p.name;
+  }
+  // Parsea una línea CSV respetando comillas ("valor con ; adentro").
+  function parseHistCsvLine(line, delim){
+    var out = [], cur = '', inQ = false;
+    for(var i=0;i<line.length;i++){
+      var c = line[i];
+      if(inQ){
+        if(c==='"'){ if(line[i+1]==='"'){ cur+='"'; i++; } else inQ=false; }
+        else cur+=c;
+      }else{
+        if(c==='"') inQ=true;
+        else if(c===delim){ out.push(cur); cur=''; }
+        else cur+=c;
+      }
+    }
+    out.push(cur);
+    return out.map(function(x){ return x.trim(); });
+  }
+  var HIST_CSV_HEADER = ['Cliente','Tipo de licencia','Proyecto','Cantidad','Precio unitario (US$)','Fecha de solicitud (AAAA-MM-DD)','Fecha requerida (AAAA-MM-DD)','Fecha de activación (AAAA-MM-DD)','Estado (opcional, default activado)','Gestionado por (opcional)'];
+  function parseHistCsv(text){
+    var raw = String(text||'').replace(/^﻿/, '').split(/\r\n|\n|\r/).filter(function(l){ return l.length; });
+    if(!raw.length) return { rows:[], errors:['El archivo está vacío.'] };
+    var delim = raw[0].indexOf(';')>-1 ? ';' : ',';
+    var rows = [], errors = [];
+    for(var i=1;i<raw.length;i++){
+      var cols = parseHistCsvLine(raw[i], delim);
+      var rowNum = i+1;
+      var cliente = cols[0]||'', tipo = cols[1]||'', proyecto = cols[2]||'', cantidad = cols[3]||'', precio = cols[4]||'',
+        fSol = (cols[5]||'').slice(0,10), fReq = (cols[6]||'').slice(0,10), fAct = (cols[7]||'').slice(0,10),
+        estado = (cols[8]||'activado').toLowerCase().trim() || 'activado', gestor = cols[9]||'';
+      if(!cliente || !tipo || !cantidad || !precio || !fSol || !fReq){
+        errors.push('Fila '+rowNum+': faltan datos obligatorios (cliente, tipo, cantidad, precio, fecha de solicitud o fecha requerida).');
+        continue;
+      }
+      if(ESTADOS.indexOf(estado)===-1){
+        errors.push('Fila '+rowNum+': estado "'+estado+'" no reconocido (usar: '+ESTADOS.join(', ')+').');
+        continue;
+      }
+      if(estado==='activado' && !fAct){
+        errors.push('Fila '+rowNum+': estado "activado" requiere fecha de activación.');
+        continue;
+      }
+      var fechaOk = /^\d{4}-\d{2}-\d{2}$/;
+      if(!fechaOk.test(fSol) || !fechaOk.test(fReq) || (fAct && !fechaOk.test(fAct))){
+        errors.push('Fila '+rowNum+': las fechas deben tener formato AAAA-MM-DD.');
+        continue;
+      }
+      var qty = parseInt(cantidad,10);
+      var price = Number(precio);
+      if(!qty || qty<1){ errors.push('Fila '+rowNum+': cantidad inválida.'); continue; }
+      if(isNaN(price) || price<0){ errors.push('Fila '+rowNum+': precio unitario inválido.'); continue; }
+      rows.push({ cliente:cliente, tipo:tipo, proyecto:proyecto, cantidad:qty, precio:price, fSol:fSol, fReq:fReq, fAct:fAct, estado:estado, gestor:gestor });
+    }
+    return { rows: rows, errors: errors };
+  }
+  // Arma el objeto de solicitud a partir de una fila ya validada (CSV o
+  // formulario manual) y crea cliente/tipo/proyecto si hiciera falta.
+  function buildHistRequest(s, row){
+    var cli = ensureHistClient(s, row.cliente);
+    var tipo = ensureHistLicenseType(s, row.tipo, row.precio);
+    var proyecto = ensureHistProject(s, row.proyecto);
+    var estado = row.estado || 'activado';
+    var enviado = estado!=='pendiente';
+    var req = {
+      id: uid('r'),
+      clientUsername: cli ? cli.username : '',
+      clientName: cli ? cli.name : row.cliente,
+      licenseTypeId: tipo ? tipo.id : '',
+      licenseTypeName: tipo ? tipo.name : row.tipo,
+      project: proyecto,
+      price: row.precio,
+      quantity: row.cantidad,
+      neededFrom: row.fReq,
+      note: 'Cargado como histórico (dato de meses pasados).',
+      requestedAt: row.fSol+'T00:00:00.000Z',
+      status: estado,
+      reviewedBy: null, reviewedAt: null,
+      notifiedToIngram: enviado, notifiedAt: enviado ? row.fSol+'T00:00:00.000Z' : null, notifiedBy: enviado ? 'Carga histórica' : null,
+      activatedAt: estado==='activado' ? row.fAct : null,
+      activatedBy: estado==='activado' ? (row.gestor || 'Carga histórica') : null,
+      historico: true
+    };
+    return req;
+  }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   // Convierte "a@x.com, b@y.com ,, c@z.com" en ['a@x.com','b@y.com','c@z.com'],
   // descartando entradas vacías/inválidas (sin '@').
@@ -1087,7 +1211,47 @@
       '</tr>';
     }).join('');
 
+    var histPanel = '<div class="card card-pad" style="margin-bottom:1rem">' +
+      '<div class="card-title">Cargar histórico (solicitudes de meses pasados)' +
+        '<button type="button" class="btn btn-subtle btn-sm" style="margin-left:auto" onclick="App.toggleImportHist()">'+(importHistOpen?'Cerrar':'Abrir')+'</button>' +
+      '</div>' +
+      (!importHistOpen ? '<p class="hint">Sube un CSV o carga una solicitud a mano para poner al día la BD con licencias ya activas de meses anteriores.</p>' :
+        '<p class="hint">Columnas del CSV (separadas por ; o ,): '+HIST_CSV_HEADER.join(' · ')+'. Si el cliente, tipo o proyecto no existen, se crean automáticamente.</p>' +
+        '<div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin:.4rem 0">' +
+          '<button type="button" class="btn btn-ghost btn-sm" onclick="App.downloadHistTemplate()">Descargar plantilla CSV</button>' +
+          '<input type="file" accept=".csv,text/csv" id="hist-csv-input" onchange="App.handleImportHistFile(this)" />' +
+        '</div>' +
+        (importHistFileName ? '<p class="hint">Archivo: '+esc(importHistFileName)+'</p>' : '') +
+        (importHistErrors.length ? '<div class="notice-box" style="border-color:var(--danger,#e5484d)"><span><strong>'+importHistErrors.length+' fila'+(importHistErrors.length===1?'':'s')+' con error'+(importHistErrors.length===1?'':'es')+' (no se importarán):</strong><br>'+importHistErrors.map(esc).join('<br>')+'</span></div>' : '') +
+        (importHistRows && importHistRows.length ?
+          '<p class="hint"><strong>'+importHistRows.length+' fila'+(importHistRows.length===1?'':'s')+' lista'+(importHistRows.length===1?'':'s')+' para importar.</strong></p>' +
+          '<div style="display:flex;gap:.6rem">' +
+            '<button type="button" class="btn btn-primary btn-sm" '+(importHistBusy?'disabled':'')+' onclick="App.confirmImportHist()">'+(importHistBusy?'Importando…':'Confirmar importación')+'</button>' +
+            '<button type="button" class="btn btn-ghost btn-sm" onclick="App.cancelImportHist()">Cancelar</button>' +
+          '</div>'
+        : '') +
+        '<hr style="border:none;border-top:1px solid var(--border);margin:1rem 0" />' +
+        '<button type="button" class="btn btn-subtle btn-sm" onclick="App.toggleManualHist()">'+(manualHistOpen?'Ocultar formulario manual':'Cargar una solicitud a mano')+'</button>' +
+        (manualHistOpen ?
+          '<form onsubmit="App.submitManualHist(event)" class="stack" style="margin-top:.6rem">' +
+            '<div class="field"><label>Cliente (nombre)</label><input name="cliente" list="hist-clientes" required /><datalist id="hist-clientes">'+clients.map(function(c){ return '<option value="'+esc(c.name)+'">'; }).join('')+'</datalist></div>' +
+            '<div class="field"><label>Tipo de licencia</label><input name="tipo" list="hist-tipos" required /><datalist id="hist-tipos">'+allTypes.map(function(t){ return '<option value="'+esc(t.name)+'">'; }).join('')+'</datalist></div>' +
+            '<div class="field"><label>Proyecto</label><input name="proyecto" list="hist-proyectos" /><datalist id="hist-proyectos">'+projectNames(false).map(function(p){ return '<option value="'+esc(p)+'">'; }).join('')+'</datalist></div>' +
+            '<div class="field"><label>Cantidad</label><input name="cantidad" type="number" min="1" step="1" value="1" required /></div>' +
+            '<div class="field"><label>Precio unitario (US$)</label><input name="precio" type="number" min="0" step="0.01" required /></div>' +
+            '<div class="field"><label>Fecha de solicitud</label><input name="fSol" type="date" required /></div>' +
+            '<div class="field"><label>Fecha requerida</label><input name="fReq" type="date" required /></div>' +
+            '<div class="field"><label>Estado</label><select name="estado">'+ESTADOS.map(function(s){ return '<option value="'+s+'" '+(s==='activado'?'selected':'')+'>'+s+'</option>'; }).join('')+'</select></div>' +
+            '<div class="field"><label>Fecha de activación (si aplica)</label><input name="fAct" type="date" /></div>' +
+            '<div class="field"><label>Gestionado por (opcional)</label><input name="gestor" placeholder="Nombre del operador" /></div>' +
+            '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Agregar solicitud histórica</button>' +
+          '</form>'
+        : '')
+      ) +
+    '</div>';
+
     return '<div class="section-head"><h2>Solicitudes</h2><p>Valida las solicitudes de licencia enviadas por tus clientes y envía por correo las que ya están aprobadas para su gestión.</p></div>' +
+    histPanel +
     '<div class="settings-bar">' +
       '<div class="field"><label>Correo de contacto para el envío</label><input type="email" value="'+esc(STATE.settings.ingramEmail||'')+'" placeholder="contacto@proveedor.com" onchange="App.setIngramEmail(this.value)" /></div>' +
       '<div class="field"><label>Copia (CC), opcional</label><input type="text" value="'+esc(STATE.settings.ingramCc||'')+'" placeholder="correo1@empresa.com, correo2@empresa.com" onchange="App.setIngramCc(this.value)" /></div>' +
@@ -1807,6 +1971,75 @@
       commit(function(s){ s.requests = s.requests.filter(function(x){ return x.id!==id; }); });
       selectedForIngram.delete(id);
       showToast('Solicitud eliminada.', 'success');
+    },
+
+    // ---------- Carga de histórico ----------
+    toggleImportHist: function(){
+      importHistOpen = !importHistOpen;
+      if(!importHistOpen){ importHistRows = null; importHistErrors = []; importHistFileName = ''; manualHistOpen = false; }
+      render();
+    },
+    downloadHistTemplate: function(){
+      var ejemplo = ['TARJETAS PERUANAS','Google Workspace Business Plus','tarjetasperuanas.com.pe','200','22.00','2026-08-01','2026-08-05','2026-08-05','activado','Stefano Borckardt'];
+      downloadCsv('plantilla_historico_licencias.csv', HIST_CSV_HEADER.join(';')+'\n'+ejemplo.join(';'));
+    },
+    handleImportHistFile: function(input){
+      var file = input.files && input.files[0];
+      importHistRows = null; importHistErrors = [];
+      if(!file){ render(); return; }
+      importHistFileName = file.name;
+      var reader = new FileReader();
+      reader.onload = function(){
+        var parsed = parseHistCsv(String(reader.result||''));
+        importHistRows = parsed.rows;
+        importHistErrors = parsed.errors;
+        if(!parsed.rows.length && !parsed.errors.length){ importHistErrors = ['No se encontraron filas de datos en el archivo.']; }
+        render();
+      };
+      reader.onerror = function(){ importHistErrors = ['No se pudo leer el archivo.']; render(); };
+      reader.readAsText(file, 'utf-8');
+      render();
+    },
+    cancelImportHist: function(){
+      importHistRows = null; importHistErrors = []; importHistFileName = '';
+      var input = document.getElementById('hist-csv-input');
+      if(input) input.value = '';
+      render();
+    },
+    confirmImportHist: async function(){
+      if(!importHistRows || !importHistRows.length) return;
+      importHistBusy = true; render();
+      var rowsToImport = importHistRows.slice();
+      var ok = await commitSynced(function(s){
+        rowsToImport.forEach(function(row){ s.requests.push(buildHistRequest(s, row)); });
+      });
+      importHistBusy = false;
+      importHistRows = null; importHistErrors = []; importHistFileName = '';
+      var input = document.getElementById('hist-csv-input');
+      if(input) input.value = '';
+      showToast(ok ? rowsToImport.length+' solicitud'+(rowsToImport.length===1?'':'es')+' histórica'+(rowsToImport.length===1?'':'s')+' importada'+(rowsToImport.length===1?'':'s')+'.' : 'Se importó localmente, pero no se pudo sincronizar. Reintenta.', ok ? 'success' : 'error');
+    },
+    toggleManualHist: function(){ manualHistOpen = !manualHistOpen; render(); },
+    submitManualHist: async function(ev){
+      ev.preventDefault();
+      var f = ev.target;
+      var row = {
+        cliente: f.cliente.value.trim(),
+        tipo: f.tipo.value.trim(),
+        proyecto: f.proyecto.value.trim(),
+        cantidad: Math.max(1, parseInt(f.cantidad.value,10)||1),
+        precio: Number(f.precio.value)||0,
+        fSol: f.fSol.value,
+        fReq: f.fReq.value,
+        fAct: f.fAct.value||'',
+        estado: f.estado.value,
+        gestor: f.gestor.value.trim()
+      };
+      if(!row.cliente || !row.tipo || !row.fSol || !row.fReq){ showToast('Completa cliente, tipo y las fechas de solicitud/requerida.', 'error'); return; }
+      if(row.estado==='activado' && !row.fAct){ showToast('El estado "activado" necesita la fecha de activación.', 'error'); return; }
+      var ok = await commitSynced(function(s){ s.requests.push(buildHistRequest(s, row)); });
+      showToast(ok ? 'Solicitud histórica agregada.' : 'Se agregó localmente, pero no se pudo sincronizar. Reintenta.', ok ? 'success' : 'error');
+      if(ok){ f.reset(); }
     },
     toggleRowMenu: function(id, evt){
       if(openRowMenu===id){
