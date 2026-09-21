@@ -262,7 +262,7 @@
   function prorrateoCell(r){
     var pr = prorrateo(r);
     if(!pr) return '<span style="color:var(--ink-subtle)">—</span>';
-    return '<span title="'+pr.dias+' de '+pr.delMes+' días">'+money(pr.monto)+'</span>';
+    return '<span title="'+pr.dias+' de '+pr.delMes+' días · unitario prorrateado '+money(pr.unitario)+'">'+money(pr.monto)+'</span>';
   }
   // Aviso de "licencia activada": va al correo del cliente (pestaña Clientes)
   // con copia a los buzones internos de Notificaciones.
@@ -315,7 +315,8 @@
   function puedeEnviarse(r){ return (r.status==='pendiente' || r.status==='aprobado') && !r.notifiedToIngram; }
   function esAprobada(r){ return r.status==='aprobado' || r.status==='en proceso' || r.status==='activado'; }
   // Prorrateo del mes de activación: del día de activación al fin de mes,
-  // sobre los días reales del mes (28/29/30/31).
+  // sobre los días reales del mes (28/29/30/31). Se prorratea el precio
+  // UNITARIO primero y recién ahí se multiplica por la cantidad.
   function prorrateo(r){
     if(r.status!=='activado') return null;
     var ymd = String(r.activatedAt || r.neededFrom || '').slice(0,10);
@@ -323,7 +324,9 @@
     var anio = +p[0], mes = +p[1], dia = +p[2];
     var dias = new Date(anio, mes, 0).getDate();
     var restantes = dias - dia + 1;
-    return { monto: reqTotal(r) * restantes / dias, dias: restantes, delMes: dias };
+    var unitario = Number(r.price||0) * restantes / dias;
+    var monto = unitario * Number(r.quantity||1);
+    return { monto: monto, unitario: unitario, dias: restantes, delMes: dias };
   }
   function fmtDate(iso){ if(!iso) return '—'; var d = new Date(iso); return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'}); }
   // Acepta 'YYYY-MM-DD' y también un ISO con hora ('...T10:00:00.000Z').
