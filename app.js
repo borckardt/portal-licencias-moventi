@@ -1079,7 +1079,6 @@
           (r.note ? '<div class="cell-note" title="'+esc(r.note)+'">'+esc(r.note)+'</div>' : '')+'</td>' +
         '<td style="color:var(--ink-subtle)">'+esc(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
-        '<td class="num cell-money">'+money(reqTotal(r))+'</td>' +
         '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
         '<td class="num cell-date">'+fmtDateShort(r.requestedAt)+'</td>' +
         '<td class="num cell-date">'+fmtDateShort(r.neededFrom)+'</td>' +
@@ -1097,7 +1096,7 @@
       : '';
 
     var options = activeTypes.map(function(t){
-      return '<option value="'+t.id+'">'+esc(t.name)+' — '+money(t.price)+'</option>';
+      return '<option value="'+t.id+'">'+esc(t.name)+'</option>';
     }).join('');
     var projectOptions = projectOptionsHtml(projectNames(true));
 
@@ -1132,7 +1131,7 @@
             (myReqs.length===0 ? '<div class="table-empty">Aún no registras solicitudes.</div>' :
              visibles.length===0 ? '<div class="table-empty">No hay solicitudes de este proyecto.</div>' :
             '<div class="table-fit"><table class="table-client"><thead><tr>' +
-              '<th>Tipo</th><th>Proyecto</th><th>Cant.</th><th>Precio</th><th>Estado</th>' +
+              '<th>Tipo</th><th>Proyecto</th><th>Cant.</th><th>Estado</th>' +
               '<th>Fecha de solicitud</th><th>Fecha requerida</th><th>Fecha de activación</th>' +
             '</tr></thead><tbody>'+rows+'</tbody></table></div>') +
           '</div>' +
