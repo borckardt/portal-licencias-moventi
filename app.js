@@ -1590,6 +1590,7 @@
           '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
           '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
           '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
+          '<td class="num">'+money(r.price||0)+'</td>' +
           '<td class="num">'+money(reqTotal(r))+'</td>' +
           '<td class="num">'+activadaCell(r)+'</td>' +
           '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
@@ -1603,6 +1604,7 @@
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
+        '<td class="num">'+money(r.price||0)+'</td>' +
         '<td class="num">'+money(reqTotal(r))+'</td>' +
         '<td class="num">'+activadaCell(r)+'</td>' +
         '<td>'+buildRowMenu(r.id, [
@@ -1661,7 +1663,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Estado</th><th>Precio</th><th>Fecha de activación</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Estado</th><th>Precio unitario</th><th>Precio total</th><th>Fecha de activación</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -2524,10 +2526,10 @@
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
       function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio total (US$)','Fecha de activación','Gestionado por'];
+      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio unitario (US$)','Precio total (US$)','Fecha de activación','Gestionado por'];
       var lines = [header.join(';')];
       list.forEach(function(r){
-        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.activatedAt||'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
+        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, (r.price||0), reqTotal(r), r.activatedAt||'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
       });
       var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+reqTotal(r);},0);
       lines.push('');
