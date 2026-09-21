@@ -24,7 +24,10 @@
   // clientes del portal; si más adelante cada cliente necesita su propia
   // lista, esto puede moverse a STATE (como los tipos de licencia) y
   // administrarse desde el panel.
-  var PROJECT_OPTIONS = ['Ligo-Prod', 'LigoCloudPlatform', 'Ligo-Dev'];
+  // Proyectos/servicios a los que se vincula la cuenta. Son administrables
+  // desde el panel (pestaña Proyectos) y viven en STATE.projects; esta lista
+  // solo es la semilla inicial para portales que aún no tienen ninguno.
+  var PROJECT_DEFAULTS = ['Ligo-Prod', 'LigoCloudPlatform', 'Ligo-Dev'];
 
   var STATE = JSON.parse(document.getElementById('app-state').textContent);
   if(!STATE.settings) STATE.settings = { ingramEmail: '' };
@@ -107,6 +110,7 @@
       solicitudes: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line>',
       tipos: '<path d="M20.59 13.41 13.42 20.59a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line>',
       clientes: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>',
+      proyectos: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>',
       notificaciones: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path>',
       reporte: '<line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line>',
       cuenta: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>'
@@ -397,6 +401,26 @@
     (arr||[]).forEach(function(x){ if(x && x.id!=null) map[x.id] = x; });
     return map;
   }
+
+  // Proyectos: si el portal todavía no tiene lista propia, se usa la semilla.
+  function projectList(){
+    if(Array.isArray(STATE.projects) && STATE.projects.length) return STATE.projects;
+    return PROJECT_DEFAULTS.map(function(n){ return { id:'pj-'+n.toLowerCase().replace(/[^a-z0-9]+/g,'-'), name:n, active:true }; });
+  }
+  // onlyActive: para el formulario de nueva solicitud. Los filtros y la
+  // edición usan todos, más el valor que ya tenga la solicitud, para no
+  // perder proyectos históricos.
+  function projectNames(onlyActive, extra){
+    var out = projectList().filter(function(p){ return onlyActive ? p.active!==false : true; })
+      .map(function(p){ return p.name; });
+    if(extra && out.indexOf(extra)===-1) out.push(extra);
+    return out;
+  }
+  function projectOptionsHtml(names, selected){
+    return names.map(function(p){
+      return '<option value="'+esc(p)+'" '+(p===selected?'selected':'')+'>'+esc(p)+'</option>';
+    }).join('');
+  }
   // Fusión de 3 vías por colección (users/requests/licenseTypes), usando
   // `base` (el último snapshot conocido del backend) para distinguir
   // "esto lo borré/edité yo" de "esto lo agregó/editó otra sesión" y así no
@@ -472,6 +496,7 @@
       STATE.users = mergeCollection(base.users, STATE.users, remote.users);
       STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
       STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
+      STATE.projects = mergeCollection(base.projects, STATE.projects, remote.projects);
       if(remote.settings) STATE.settings = mergeSettings((baseRemoteState||{}).settings, STATE.settings, remote.settings);
       baseRemoteState = JSON.parse(JSON.stringify(remote));
       saveLocalFallbackState();
@@ -492,6 +517,7 @@
       STATE.users = mergeCollection(base.users, STATE.users, remote.users);
       STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
       STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
+      STATE.projects = mergeCollection(base.projects, STATE.projects, remote.projects);
       if(remote.settings) STATE.settings = mergeSettings((baseRemoteState||{}).settings, STATE.settings, remote.settings);
       baseRemoteState = JSON.parse(JSON.stringify(remote));
       saveLocalFallbackState();
@@ -515,6 +541,7 @@
             STATE.users = mergeCollection(base.users, STATE.users, remote.users);
             STATE.requests = mergeCollection(base.requests, STATE.requests, remote.requests);
             STATE.licenseTypes = mergeCollection(base.licenseTypes, STATE.licenseTypes, remote.licenseTypes);
+            STATE.projects = mergeCollection(base.projects, STATE.projects, remote.projects);
           }
           await saveRemoteState(STATE);
           baseRemoteState = JSON.parse(JSON.stringify(STATE));
@@ -813,7 +840,7 @@
     var options = activeTypes.map(function(t){
       return '<option value="'+t.id+'">'+esc(t.name)+' — '+money(t.price)+'</option>';
     }).join('');
-    var projectOptions = PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'">'+esc(p)+'</option>'; }).join('');
+    var projectOptions = projectOptionsHtml(projectNames(true));
 
     return topbar(user, 'Cliente') +
     '<div class="app-body">' +
@@ -860,6 +887,7 @@
     var items = [
       ['solicitudes','Solicitudes'],
       ['tipos','Tipos de licencia'],
+      ['proyectos','Proyectos'],
       ['clientes','Clientes'],
       ['notificaciones','Notificaciones'],
       ['reporte','Reporte'],
@@ -915,7 +943,7 @@
 
       if(isEditing){
         var typeOptions = allTypes.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
-        var projectOptionsEdit = PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(p===r.project?'selected':'')+'>'+esc(p)+'</option>'; }).join('');
+        var projectOptionsEdit = projectOptionsHtml(projectNames(false, r.project), r.project);
         return '<tr class="editing-row" id="req-row-'+r.id+'">' +
           '<td></td>' +
           '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
@@ -1001,7 +1029,7 @@
         ['todos','pendiente','aprobado','rechazado'].map(function(s){ return '<option value="'+s+'" '+(solFilter.estado===s?'selected':'')+'>'+(s==='todos'?'Todos':s)+'</option>'; }).join('') +
       '</select></div>' +
       '<div class="field"><label>Proyecto</label><select onchange="App.setSolFilter(\'proyecto\', this.value)">' +
-        '<option value="todos">Todos</option>' + PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(solFilter.proyecto===p?'selected':'')+'>'+esc(p)+'</option>'; }).join('') +
+        '<option value="todos">Todos</option>' + projectOptionsHtml(projectNames(false), solFilter.proyecto) +
       '</select></div>' +
     '</div>' +
     '<div class="card">' +
@@ -1040,6 +1068,39 @@
       '<div class="card">' +
         (STATE.licenseTypes.length===0 ? '<div class="table-empty">Aún no hay tipos de licencia.</div>' :
         '<div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Precio</th><th>Estado</th><th>Uso</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '</div>' +
+    '</div>';
+  }
+
+  // Proyectos/servicios administrables: lo que se agregue aquí aparece de
+  // inmediato en el formulario del cliente y en los filtros.
+  function renderAdminProyectos(){
+    var rows = projectList().map(function(p){
+      var usedCount = STATE.requests.filter(function(r){ return r.project===p.name; }).length;
+      var activo = p.active!==false;
+      return '<tr>' +
+        '<td class="lt-name">'+esc(p.name)+'</td>' +
+        '<td><span class="pill status-'+(activo?'activo':'bloqueado')+'">'+(activo?'activo':'bloqueado')+'</span></td>' +
+        '<td style="color:var(--ink-subtle)">'+usedCount+' solicitud'+(usedCount===1?'':'es')+'</td>' +
+        '<td>' +
+          '<button class="btn btn-subtle btn-sm" onclick="App.toggleProjectActive(\''+p.id+'\')">'+(activo?'Ocultar':'Activar')+'</button> ' +
+          '<button class="btn btn-danger btn-sm" '+(usedCount>0?'disabled title="Tiene solicitudes asociadas"':'onclick="App.removeProject(\''+p.id+'\')"')+'>Eliminar</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div class="section-head"><h2>Proyectos</h2><p>Los proyectos/servicios a los que el cliente puede vincular la cuenta al pedir una licencia.</p></div>' +
+    '<div class="grid-2">' +
+      '<div class="card card-pad">' +
+        '<div class="card-title">Añadir proyecto</div>' +
+        '<form onsubmit="App.addProject(event)" class="stack">' +
+          '<div class="field"><label>Nombre</label><input name="name" placeholder="Ej. Ligo-QA" required /></div>' +
+          '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Añadir</button>' +
+        '</form>' +
+        '<p class="hint">"Ocultar" lo saca del formulario del cliente pero mantiene las solicitudes que ya lo usan.</p>' +
+      '</div>' +
+      '<div class="card">' +
+        '<div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Estado</th><th>Uso</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>' +
       '</div>' +
     '</div>';
   }
@@ -1250,7 +1311,7 @@
     // Desglose por proyecto/servicio (Ligo-Prod / LigoCloudPlatform /
     // Ligo-Dev): a qué proyecto quedaron vinculadas las cuentas solicitadas
     // en el periodo/filtros actuales.
-    var projectBreakdown = PROJECT_OPTIONS.map(function(p){
+    var projectBreakdown = projectNames(false).map(function(p){
       var reqsP = list.filter(function(r){ return r.project===p; });
       var aprobadasP = reqsP.filter(function(r){ return r.status==='aprobado'; });
       return {
@@ -1266,7 +1327,7 @@
     var rows = list.map(function(r){
       if(editingRequestId===r.id){
         var typeOptionsR = allTypesReporte.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
-        var projectOptionsR = PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(p===r.project?'selected':'')+'>'+esc(p)+'</option>'; }).join('');
+        var projectOptionsR = projectOptionsHtml(projectNames(false, r.project), r.project);
         return '<tr class="editing-row">' +
           '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
           '<td class="wrap">'+esc(r.clientName)+'</td>' +
@@ -1322,7 +1383,7 @@
         '<option value="todos">Todos</option>' + STATE.licenseTypes.map(function(t){ return '<option value="'+t.id+'" '+(reportFilter.tipo===t.id?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('') +
       '</select></div>' +
       '<div class="field"><label>Proyecto</label><select onchange="App.setReportFilter(\'proyecto\', this.value)">' +
-        '<option value="todos">Todos</option>' + PROJECT_OPTIONS.map(function(p){ return '<option value="'+esc(p)+'" '+(reportFilter.proyecto===p?'selected':'')+'>'+esc(p)+'</option>'; }).join('') +
+        '<option value="todos">Todos</option>' + projectOptionsHtml(projectNames(false), reportFilter.proyecto) +
       '</select></div>' +
       '<button class="btn btn-primary" style="margin-left:auto" onclick="App.exportReport()">Descargar reporte (CSV)</button>' +
     '</div>' +
@@ -1378,6 +1439,7 @@
     var body;
     if(adminTab==='solicitudes') body = renderAdminSolicitudes();
     else if(adminTab==='tipos') body = renderAdminTipos();
+    else if(adminTab==='proyectos') body = renderAdminProyectos();
     else if(adminTab==='clientes') body = renderAdminClientes();
     else if(adminTab==='notificaciones') body = renderAdminNotificaciones();
     else if(adminTab==='cuenta') body = renderAdminCuenta(user);
@@ -1961,6 +2023,37 @@
     removeType: function(id){
       commit(function(s){ s.licenseTypes = s.licenseTypes.filter(function(x){ return x.id!==id; }); });
       showToast('Tipo de licencia eliminado.', 'success');
+    },
+
+    // Proyectos. La primera edición materializa la lista semilla en STATE
+    // para que a partir de ahí sea totalmente administrable.
+    addProject: async function(ev){
+      ev.preventDefault();
+      var name = ev.target.name.value.trim();
+      if(!name) return;
+      if(projectNames(false).some(function(p){ return p.toLowerCase()===name.toLowerCase(); })){
+        showToast('Ese proyecto ya existe.', 'error'); return;
+      }
+      var ok = await commitSynced(function(s){
+        if(!Array.isArray(s.projects) || !s.projects.length) s.projects = projectList().slice();
+        s.projects.push({ id: uid('pj'), name: name, active: true });
+      });
+      showToast(ok ? 'Proyecto añadido. Ya aparece en el formulario del cliente.' : 'Se añadió localmente, pero no se pudo sincronizar. Reintenta.', ok ? 'success' : 'error');
+    },
+    toggleProjectActive: async function(id){
+      var ok = await commitSynced(function(s){
+        if(!Array.isArray(s.projects) || !s.projects.length) s.projects = projectList().slice();
+        var p = s.projects.find(function(x){ return x.id===id; });
+        if(p) p.active = p.active===false;
+      });
+      if(!ok) showToast('No se pudo sincronizar el cambio. Reintenta.', 'error');
+    },
+    removeProject: async function(id){
+      var ok = await commitSynced(function(s){
+        if(!Array.isArray(s.projects) || !s.projects.length) s.projects = projectList().slice();
+        s.projects = s.projects.filter(function(x){ return x.id!==id; });
+      });
+      showToast(ok ? 'Proyecto eliminado.' : 'Se eliminó localmente, pero no se pudo sincronizar. Reintenta.', ok ? 'success' : 'error');
     },
 
     addClient: async function(ev){
