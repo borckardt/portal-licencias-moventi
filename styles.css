@@ -155,6 +155,8 @@
   .status-rechazado{ background:var(--danger-bg); color:var(--danger); }
   .status-activo{ background:var(--success-bg); color:var(--success); }
   .status-bloqueado{ background:var(--danger-bg); color:var(--danger); }
+  .status-enproceso{ background:var(--warning-bg); color:var(--warning); }
+  .status-activado{ background:var(--success-bg); color:var(--success); }
   .status-enviado{ background:var(--teal-soft); color:var(--teal); }
   .status-sinenviar{ background:var(--surface-alt); color:var(--ink-subtle); }
   .status-programado{ background:var(--warning-bg); color:var(--warning); text-transform:none; }

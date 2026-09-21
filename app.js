@@ -259,7 +259,71 @@
     return ok;
   }
 
+  function prorrateoCell(r){
+    var pr = prorrateo(r);
+    if(!pr) return '<span style="color:var(--ink-subtle)">—</span>';
+    return '<span title="'+pr.dias+' de '+pr.delMes+' días">'+money(pr.monto)+'</span>';
+  }
+  // Aviso de "licencia activada": va al correo del cliente (pestaña Clientes)
+  // con copia a los buzones internos de Notificaciones.
+  async function notifyActivation(r){
+    if(!r) return false;
+    await syncStateFromBackend();
+    var cli = STATE.users.find(function(u){ return u.username===r.clientUsername; });
+    var destinos = [];
+    if(cli && cli.email) destinos.push(String(cli.email).trim());
+    (STATE.settings.notifyEmails||[]).forEach(function(n){ if(n && n.email) destinos.push(String(n.email).trim()); });
+    destinos = destinos.filter(function(e,i,a){ return e && e.indexOf('@')>-1 && a.indexOf(e)===i; });
+    if(!destinos.length) return false;
+
+    var pr = prorrateo(r);
+    var subject = 'Licencia activada — ' + r.licenseTypeName + ' (' + (r.quantity||1) + ')';
+    var text = 'Hola,\n\nConfirmamos que la licencia solicitada ya se encuentra ACTIVA:\n\n' +
+      '- Cliente: ' + r.clientName + '\n' +
+      '- Tipo: ' + r.licenseTypeName + '\n' +
+      '- Proyecto: ' + (r.project||'—') + '\n' +
+      '- Cantidad: ' + (r.quantity||1) + '\n' +
+      '- Fecha de activación: ' + fmtDateShort(r.activatedAt||r.neededFrom) + '\n' +
+      (pr ? '- Prorrateo del mes (' + pr.dias + ' de ' + pr.delMes + ' días): ' + money(pr.monto) + '\n' : '') +
+      '\nSaludos,\nMoventi';
+    var html = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
+      '<p>Confirmamos que la licencia solicitada ya se encuentra <strong>activa</strong>:</p>' +
+      '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
+      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Fecha de activación</th></tr>' +
+      '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.project||'—')+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:center">'+(r.quantity||1)+'</td>' +
+      '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+fmtDateShort(r.activatedAt||r.neededFrom)+'</td></tr>' +
+      '</table>' +
+      (pr ? '<p style="color:#555">Prorrateo del mes de activación ('+pr.dias+' de '+pr.delMes+' días): <strong>'+money(pr.monto)+'</strong></p>' : '') +
+      '</div>';
+    var ok = await sendEmailBestEffort(destinos, subject, text, html);
+    commit(function(st){
+      var t = st.requests.find(function(x){ return x.id===r.id; });
+      if(!t) return;
+      t.activationEmailSent = ok;
+      t.activationEmailTo = destinos.join(', ');
+    });
+    return ok;
+  }
+
   function reqTotal(r){ return Number(r.price||0) * Number(r.quantity||1); }
+  // Estados: pendiente > aprobado > en proceso (pedida al distribuidor) > activado.
+  var ESTADOS = ['pendiente','aprobado','en proceso','activado','rechazado'];
+  function statusCls(st){ return 'status-' + String(st||'').replace(/\s+/g,''); }
+  function esAprobada(r){ return r.status==='aprobado' || r.status==='en proceso' || r.status==='activado'; }
+  // Prorrateo del mes de activación: del día de activación al fin de mes,
+  // sobre los días reales del mes (28/29/30/31).
+  function prorrateo(r){
+    if(r.status!=='activado') return null;
+    var ymd = String(r.activatedAt || r.neededFrom || '').slice(0,10);
+    var p = ymd.split('-'); if(p.length!==3) return null;
+    var anio = +p[0], mes = +p[1], dia = +p[2];
+    var dias = new Date(anio, mes, 0).getDate();
+    var restantes = dias - dia + 1;
+    return { monto: reqTotal(r) * restantes / dias, dias: restantes, delMes: dias };
+  }
   function fmtDate(iso){ if(!iso) return '—'; var d = new Date(iso); return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'}); }
   // Acepta 'YYYY-MM-DD' y también un ISO con hora ('...T10:00:00.000Z').
   function fmtDateShort(ymd){ if(!ymd) return '—'; var p = String(ymd).slice(0,10).split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
@@ -821,7 +885,7 @@
         '<td style="color:var(--ink-subtle)">'+esc(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num cell-money">'+money(reqTotal(r))+'</td>' +
-        '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+        '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
         '<td class="num cell-date">'+fmtDateShort(r.requestedAt)+'</td>' +
         '<td class="num cell-date">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td class="num cell-date">'+(r.reviewedAt ? fmtDateShort(r.reviewedAt) : '—')+'</td>' +
@@ -953,7 +1017,8 @@
           '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
           '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
           '<td class="num">'+money(reqTotal(r))+'</td>' +
-          '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+          '<td class="num">'+prorrateoCell(r)+'</td>' +
+          '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
           '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
           '<td>—</td>' +
           '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
@@ -963,6 +1028,10 @@
       var menuItems = [];
       if(r.status==='pendiente'){
         menuItems.push({label:'Rechazar', cls:'rm-danger', onclick:"App.reviewRequest('"+r.id+"','rechazado')"});
+      }
+      // Activación: el operador la marca cuando el distribuidor confirma.
+      if(r.status==='en proceso'){
+        menuItems.push({label:'Marcar como activada', onclick:"App.markActivated('"+r.id+"')"});
       }
       // Envío programado: se dispara solo en la fecha de activación.
       if(r.status==='aprobado' && !r.notifiedToIngram){
@@ -993,7 +1062,8 @@
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td class="num">'+money(reqTotal(r))+'</td>' +
-        '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+        '<td class="num">'+prorrateoCell(r)+'</td>' +
+        '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
         '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
         '<td>'+notified+'</td>' +
         '<td>'+actions+'</td>' +
@@ -1026,7 +1096,7 @@
         '<option value="todos">Todos</option>' + clients.map(function(c){ return '<option value="'+c.username+'" '+(solFilter.cliente===c.username?'selected':'')+'>'+esc(c.name)+'</option>'; }).join('') +
       '</select></div>' +
       '<div class="field"><label>Estado</label><select onchange="App.setSolFilter(\'estado\', this.value)">' +
-        ['todos','pendiente','aprobado','rechazado'].map(function(s){ return '<option value="'+s+'" '+(solFilter.estado===s?'selected':'')+'>'+(s==='todos'?'Todos':s)+'</option>'; }).join('') +
+        ['todos'].concat(ESTADOS).map(function(s){ return '<option value="'+s+'" '+(solFilter.estado===s?'selected':'')+'>'+(s==='todos'?'Todos':s)+'</option>'; }).join('') +
       '</select></div>' +
       '<div class="field"><label>Proyecto</label><select onchange="App.setSolFilter(\'proyecto\', this.value)">' +
         '<option value="todos">Todos</option>' + projectOptionsHtml(projectNames(false), solFilter.proyecto) +
@@ -1034,7 +1104,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes con estos filtros.</div>' :
-      '<div class="table-wrap no-scrollbar"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Precio</th><th>Estado</th><th>Fecha autorizada</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap no-scrollbar"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Precio</th><th>Prorrateo</th><th>Estado</th><th>Fecha autorizada</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -1117,7 +1187,9 @@
           // actual no se guarda en texto plano en ningún lado (solo su
           // hash), así que no hay nada que precargar aquí. Si se deja
           // vacío al guardar, la contraseña no cambia.
-          '<td colspan="2"><input class="mini-input mono" type="password" autocomplete="new-password" id="edit-client-password-'+u.id+'" value="" placeholder="Nueva contraseña (opcional)" /></td>' +
+          '<td><input class="mini-input mono" type="password" autocomplete="new-password" id="edit-client-password-'+u.id+'" value="" placeholder="Nueva contraseña (opcional)" /></td>' +
+          '<td><input class="mini-input" id="edit-client-email-'+u.id+'" value="'+esc(u.email||'')+'" placeholder="correo@cliente.com" /></td>' +
+          '<td></td>' +
           '<td>' +
             '<button class="btn btn-primary btn-sm" onclick="App.saveEditClient(\''+u.id+'\')">Guardar</button> ' +
             '<button class="btn btn-ghost btn-sm" onclick="App.cancelEditClient()">Cancelar</button>' +
@@ -1129,6 +1201,7 @@
         '<td class="lt-name">'+esc(u.name)+'</td>' +
         '<td class="mono">'+esc(u.username)+'</td>' +
         '<td><span class="mono" style="color:var(--ink-subtle)">••••••••</span></td>' +
+        '<td>'+(u.email ? esc(u.email) : '<span style="color:var(--ink-subtle)">— sin correo —</span>')+'</td>' +
         '<td><span class="pill status-'+(u.active?'activo':'bloqueado')+'">'+(u.active?'activo':'bloqueado')+'</span></td>' +
         '<td style="color:var(--ink-subtle)">'+reqCount+' solicitud'+(reqCount===1?'':'es')+'</td>' +
         '<td>' +
@@ -1147,12 +1220,14 @@
           '<div class="field"><label>Nombre / empresa</label><input name="name" placeholder="Ej. Beta Consultores S.A.C." required /></div>' +
           '<div class="field"><label>Usuario</label><input name="username" placeholder="usuario de acceso" required /></div>' +
           '<div class="field"><label>Contraseña</label><input name="password" type="password" autocomplete="new-password" placeholder="contraseña inicial" required /></div>' +
+          '<div class="field"><label>Correo de aviso</label><input name="email" type="email" placeholder="correo@cliente.com" /></div>' +
+          '<p class="hint">A este correo se le avisa cuando su licencia queda activada. Puedes dejarlo vacío y completarlo después.</p>' +
           '<p class="hint">La contraseña se guarda encriptada (hash); ni el administrador ni nadie con las herramientas de desarrollador puede volver a verla en texto plano — solo se puede definir una nueva.</p>' +
           '<button class="btn btn-primary" type="submit" style="align-self:flex-start">Crear cuenta</button>' +
         '</form>' +
       '</div>' +
       '<div class="card">' +
-        '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Usuario</th><th>Contraseña</th><th>Estado</th><th>Uso</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Usuario</th><th>Contraseña</th><th>Correo de aviso</th><th>Estado</th><th>Uso</th><th>Acciones</th></tr></thead><tbody>'+rows+'</tbody></table></div>' +
       '</div>' +
     '</div>';
   }
@@ -1304,7 +1379,7 @@
     }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
 
     var totalSolicitudes = list.length;
-    var aprobadas = list.filter(function(r){ return r.status==='aprobado'; });
+    var aprobadas = list.filter(esAprobada);
     var montoAprobado = aprobadas.reduce(function(s,r){ return s + reqTotal(r); }, 0);
     var totalLicencias = list.reduce(function(s,r){ return s + Number(r.quantity||1); }, 0);
 
@@ -1313,7 +1388,7 @@
     // en el periodo/filtros actuales.
     var projectBreakdown = projectNames(false).map(function(p){
       var reqsP = list.filter(function(r){ return r.project===p; });
-      var aprobadasP = reqsP.filter(function(r){ return r.status==='aprobado'; });
+      var aprobadasP = reqsP.filter(esAprobada);
       return {
         project: p,
         count: reqsP.length,
@@ -1335,8 +1410,9 @@
           '<td class="wrap"><select class="mini-select" id="edit-project-'+r.id+'">'+projectOptionsR+'</select></td>' +
           '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
           '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
-          '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+          '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
           '<td class="num">'+money(reqTotal(r))+'</td>' +
+          '<td class="num">'+prorrateoCell(r)+'</td>' +
           '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
           '<td style="color:var(--ink-subtle)">'+esc(r.reviewedBy||'—')+'</td>' +
           '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
@@ -1349,8 +1425,9 @@
         '<td class="wrap">'+esc(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
-        '<td><span class="pill status-'+r.status+'">'+r.status+'</span></td>' +
+        '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
         '<td class="num">'+money(reqTotal(r))+'</td>' +
+        '<td class="num">'+prorrateoCell(r)+'</td>' +
         '<td class="num">'+(r.reviewedAt ? fmtDate(r.reviewedAt) : '—')+'</td>' +
         '<td style="color:var(--ink-subtle)">'+esc(r.reviewedBy||'—')+'</td>' +
         '<td>'+buildRowMenu(r.id, [
@@ -1377,7 +1454,7 @@
         '<option value="todos">Todos</option>' + clients.map(function(c){ return '<option value="'+c.username+'" '+(reportFilter.cliente===c.username?'selected':'')+'>'+esc(c.name)+'</option>'; }).join('') +
       '</select></div>' +
       '<div class="field"><label>Estado</label><select onchange="App.setReportFilter(\'estado\', this.value)">' +
-        ['todos','pendiente','aprobado','rechazado'].map(function(s){ return '<option value="'+s+'" '+(reportFilter.estado===s?'selected':'')+'>'+(s==='todos'?'Todos':s)+'</option>'; }).join('') +
+        ['todos'].concat(ESTADOS).map(function(s){ return '<option value="'+s+'" '+(reportFilter.estado===s?'selected':'')+'>'+(s==='todos'?'Todos':s)+'</option>'; }).join('') +
       '</select></div>' +
       '<div class="field"><label>Tipo de licencia</label><select onchange="App.setReportFilter(\'tipo\', this.value)">' +
         '<option value="todos">Todos</option>' + STATE.licenseTypes.map(function(t){ return '<option value="'+t.id+'" '+(reportFilter.tipo===t.id?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('') +
@@ -1409,7 +1486,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Estado</th><th>Precio</th><th>Fecha autorizada</th><th>Revisado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Estado</th><th>Precio</th><th>Prorrateo</th><th>Fecha autorizada</th><th>Revisado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -1812,6 +1889,36 @@
       STATE.requests.forEach(function(r){ if(r.status==='aprobado' && !r.notifiedToIngram) selectedForIngram.add(r.id); });
       render();
     },
+    // Paso final: el operador confirma que el distribuidor activó la
+    // licencia. Cambia el estado a "activado" y avisa por correo al cliente.
+    markActivated: function(id){
+      var r = STATE.requests.find(function(x){ return x.id===id; });
+      if(!r) return;
+      var cli = STATE.users.find(function(u){ return u.username===r.clientUsername; });
+      var correoCliente = cli && (cli.email||'').trim();
+      askConfirm({
+        titulo: '¿Confirmas que la licencia ya está activa?',
+        mensaje: correoCliente
+          ? 'La solicitud pasa a "activado" y se avisa por correo a ' + correoCliente + '.'
+          : 'La solicitud pasa a "activado". Este cliente no tiene correo de aviso cargado (pestaña Clientes), así que solo se notifica internamente.',
+        detalle: '<div><strong>' + esc(r.licenseTypeName) + '</strong> — ' + (r.quantity||1) + ' · ' + esc(r.clientName) + '</div>',
+        etiquetaOk: 'Sí, está activa',
+        onOk: async function(){
+          var admin = currentUser();
+          var hoy = todayYmd();
+          var ok = await commitSynced(function(st){
+            var t = st.requests.find(function(x){ return x.id===id; });
+            if(!t) return;
+            t.status = 'activado';
+            t.activatedAt = hoy;
+            t.activatedBy = admin ? admin.name : null;
+          });
+          render();
+          await notifyActivation(STATE.requests.find(function(x){ return x.id===id; }));
+          showToast(ok ? 'Licencia marcada como activada y aviso enviado.' : 'Se marcó localmente, pero no se pudo sincronizar. Reintenta.', ok ? 'success' : 'error');
+        }
+      });
+    },
     // Envío programado: marca la solicitud para que el cron diario
     // (api/run-scheduled.js) la envíe el día de su fecha de activación.
     scheduleSend: function(id){
@@ -1942,7 +2049,7 @@
             commit(function(s){
               s.requests.forEach(function(r){
                 if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
-                  r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null;
+                  r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null; r.status = 'en proceso';
                 }
               });
             });
@@ -1963,7 +2070,7 @@
         commit(function(s){
           s.requests.forEach(function(r){
             if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
-              r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null;
+              r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null; r.status = 'en proceso';
             }
           });
         });
@@ -1978,7 +2085,7 @@
         commit(function(s){
           s.requests.forEach(function(r){
             if(ids.indexOf(r.id)>-1 && r.status==='aprobado'){
-              r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null;
+              r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null; r.status = 'en proceso';
             }
           });
         });
@@ -2064,7 +2171,7 @@
       if(STATE.users.some(function(u){ return u.username===username; })){ showToast('Ese usuario ya existe.', 'error'); return; }
       var hash = await hashPassword(passwordValue);
       var synced = await commitSynced(function(s){
-        s.users.push({ id: uid('u'), username: username, passwordHash: hash, role: 'client', name: f.name.value.trim(), active: true });
+        s.users.push({ id: uid('u'), username: username, passwordHash: hash, role: 'client', name: f.name.value.trim(), email: (f.email && f.email.value.trim()) || '', active: true });
       });
       showToast(synced
         ? 'Cuenta de cliente creada. Ya puede iniciar sesión en el portal.'
@@ -2085,6 +2192,7 @@
       var nameEl = document.getElementById('edit-client-name-'+id);
       var usernameEl = document.getElementById('edit-client-username-'+id);
       var passwordEl = document.getElementById('edit-client-password-'+id);
+      var emailEl = document.getElementById('edit-client-email-'+id);
       var name = (nameEl.value||'').trim();
       var username = (usernameEl.value||'').trim();
       var newPassword = passwordEl.value; // vacío = no cambiar la contraseña
@@ -2098,6 +2206,7 @@
         if(!u) return;
         var oldUsername = u.username;
         u.name = name; u.username = username;
+        if(emailEl) u.email = (emailEl.value||'').trim();
         if(newHash){ u.passwordHash = newHash; delete u.password; }
         if(oldUsername!==username){
           s.requests.forEach(function(r){ if(r.clientUsername===oldUsername) r.clientUsername = username; });
@@ -2171,15 +2280,18 @@
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
       function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha solicitada','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha de Activación','Estado','Precio total (US$)','Fecha autorizada','Revisado por'];
+      var header = ['Fecha solicitada','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha de Activación','Estado','Precio total (US$)','Activada el','Prorrateo (US$)','Días prorrateados','Fecha autorizada','Revisado por'];
       var lines = [header.join(';')];
       list.forEach(function(r){
-        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.reviewedAt?dateOnly(r.reviewedAt):'', r.reviewedBy||''].map(csvField).join(';'));
+        var pr = prorrateo(r);
+        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.activatedAt||'', pr?pr.monto.toFixed(2):'', pr?(pr.dias+'/'+pr.delMes):'', r.reviewedAt?dateOnly(r.reviewedAt):'', r.reviewedBy||''].map(csvField).join(';'));
       });
-      var totalAprobado = list.filter(function(r){return r.status==='aprobado';}).reduce(function(s,r){return s+reqTotal(r);},0);
+      var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+reqTotal(r);},0);
       lines.push('');
       lines.push(['Total solicitudes', list.length].map(csvField).join(';'));
       lines.push(['Monto aprobado', totalAprobado.toFixed(2)].map(csvField).join(';'));
+      var totalPro = list.reduce(function(a,r){ var pr = prorrateo(r); return a + (pr?pr.monto:0); },0);
+      lines.push(['Monto prorrateado (activadas)', totalPro.toFixed(2)].map(csvField).join(';'));
       var fname = 'reporte_licencias_'+(reportFilter.from||'inicio')+'_a_'+(reportFilter.to||'fin')+'.csv';
       downloadCsv(fname, lines.join('\n'));
     }
