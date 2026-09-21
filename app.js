@@ -482,18 +482,20 @@
     var monto = unitario * Number(r.quantity||1);
     return { monto: monto, unitario: unitario, dias: restantes };
   }
-  function prorrateoCell(r){
+  // Precio unitario final: ya prorrateado cuando aplica (aprobada en
+  // adelante), si no, el precio de lista completo.
+  function precioUnitFinal(r){
     var pr = prorrateo(r);
-    if(!pr) return '<span style="color:var(--ink-subtle)">—</span>';
+    return pr ? pr.unitario : Number(r.price||0);
+  }
+  function precioUnitCell(r){
+    var pr = prorrateo(r);
+    if(!pr) return money(r.price||0);
     var base = r.activatedAt ? '' : ' · estimado sobre fecha requerida (se recalcula al activar)';
-    return '<span title="'+pr.dias+' días restantes · total prorrateado '+money(pr.monto)+base+'">'+money(pr.unitario)+'</span>';
+    return '<span title="'+pr.dias+' días restantes de prorrateo'+base+'">'+money(pr.unitario)+'</span>';
   }
-  // Monto total final: usa el prorrateo cuando aplica (aprobada en adelante),
-  // si no, el precio completo (unitario x cantidad).
-  function montoTotal(r){
-    var pr = prorrateo(r);
-    return pr ? pr.monto : reqTotal(r);
-  }
+  // Monto total final: precio unitario final (prorrateado o completo) x cantidad.
+  function montoTotal(r){ return precioUnitFinal(r) * Number(r.quantity||1); }
   function puedeEnviarse(r){ return (r.status==='pendiente' || r.status==='aprobado') && !r.notifiedToIngram; }
   function esAprobada(r){ return r.status==='aprobado' || r.status==='en proceso' || r.status==='activado'; }
   function fmtDate(iso){ if(!iso) return '—'; var d = new Date(iso); return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'}); }
@@ -1617,8 +1619,7 @@
           '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
           '<td class="num"><input class="mini-input" id="edit-date-'+r.id+'" type="date" value="'+(r.neededFrom||'')+'" /></td>' +
           '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
-          '<td class="num">'+money(r.price||0)+'</td>' +
-          '<td class="num">'+prorrateoCell(r)+'</td>' +
+          '<td class="num">'+precioUnitCell(r)+'</td>' +
           '<td class="num">'+money(montoTotal(r))+'</td>' +
           '<td class="num">'+activadaCell(r)+'</td>' +
           '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
@@ -1632,8 +1633,7 @@
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
-        '<td class="num">'+money(r.price||0)+'</td>' +
-        '<td class="num">'+prorrateoCell(r)+'</td>' +
+        '<td class="num">'+precioUnitCell(r)+'</td>' +
         '<td class="num">'+money(montoTotal(r))+'</td>' +
         '<td class="num">'+activadaCell(r)+'</td>' +
         '<td>'+buildRowMenu(r.id, [
@@ -1692,7 +1692,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Estado</th><th>Precio unitario</th><th title="Precio unitario prorrateado desde la fecha de activación">Prorrateado</th><th>Monto total</th><th>Fecha de activación</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Estado</th><th title="Ya prorrateado desde la fecha de activación cuando aplica">Precio unitario</th><th>Monto total</th><th>Fecha de activación</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -2555,11 +2555,10 @@
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
       function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio unitario (US$)','Precio UN. Prorrateado (US$)','Monto total (US$)','Fecha de activación','Gestionado por'];
+      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio unitario (US$)','Monto total (US$)','Fecha de activación','Gestionado por'];
       var lines = [header.join(';')];
       list.forEach(function(r){
-        var pr = prorrateo(r);
-        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, (r.price||0), pr?pr.unitario.toFixed(2):'', montoTotal(r).toFixed(2), r.activatedAt||'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
+        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, precioUnitFinal(r).toFixed(2), montoTotal(r).toFixed(2), r.activatedAt||'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
       });
       var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+reqTotal(r);},0);
       lines.push('');
