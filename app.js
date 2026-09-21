@@ -268,7 +268,8 @@
   function prorrateoCell(r){
     var pr = prorrateo(r);
     if(!pr) return '<span style="color:var(--ink-subtle)">—</span>';
-    return '<span title="'+pr.dias+' de '+pr.delMes+' días · total prorrateado '+money(pr.monto)+'">'+money(pr.unitario)+'</span>';
+    var base = r.activatedAt ? '' : ' · estimado sobre fecha requerida (se recalcula al activar)';
+    return '<span title="'+pr.dias+' de '+pr.delMes+' días · total prorrateado '+money(pr.monto)+base+'">'+money(pr.unitario)+'</span>';
   }
   // Fecha de activación + quién la gestionó, en una sola celda (ahorra una columna).
   function activadaCell(r){
@@ -329,8 +330,12 @@
   // Prorrateo del mes de activación: del día de activación al fin de mes,
   // sobre los días reales del mes (28/29/30/31). Se prorratea el precio
   // UNITARIO primero y recién ahí se multiplica por la cantidad.
+  // Se calcula desde que la solicitud está aprobada (ya no hace falta esperar
+  // a que el operario la marque como activada): usa la fecha real de
+  // activación si ya se conoce, y si no, la fecha requerida por el cliente
+  // como base estimada.
   function prorrateo(r){
-    if(r.status!=='activado') return null;
+    if(!esAprobada(r)) return null;
     var ymd = String(r.activatedAt || r.neededFrom || '').slice(0,10);
     var p = ymd.split('-'); if(p.length!==3) return null;
     var anio = +p[0], mes = +p[1], dia = +p[2];
