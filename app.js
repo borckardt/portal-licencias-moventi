@@ -194,7 +194,31 @@
     out.push(cur);
     return out.map(function(x){ return x.trim(); });
   }
-  var HIST_CSV_HEADER = ['Cliente','Tipo de licencia','Proyecto','Cantidad','Precio unitario (US$)','Fecha de solicitud (AAAA-MM-DD)','Fecha requerida (AAAA-MM-DD)','Fecha de activación (AAAA-MM-DD)','Estado (opcional, default activado)','Gestionado por (opcional)'];
+  var HIST_CSV_HEADER = ['Cliente','Tipo de licencia','Proyecto','Cantidad','Precio unitario (US$)','Fecha de solicitud (DD/MM/AAAA)','Fecha requerida (DD/MM/AAAA)','Fecha de activación (DD/MM/AAAA)','Estado (opcional, default activado)','Gestionado por (opcional)'];
+  // Acepta DD/MM/AAAA, DD-MM-AAAA y también AAAA-MM-DD (por si se pega desde
+  // un export previo). Cuando el día y el mes son ambiguos (ambos <=12) se
+  // asume DD/MM/AAAA (convención local); si uno de los dos es >12, ese es el
+  // día sin importar en qué posición vino (para tolerar planillas mezcladas
+  // como "8-19-2026" = 19 de agosto). Devuelve 'AAAA-MM-DD' o null si no se
+  // pudo interpretar.
+  function parseFlexibleDate(str){
+    var s = String(str||'').trim();
+    if(!s) return null;
+    var m = s.match(/^(\d{1,4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,4})$/);
+    if(!m) return null;
+    var a = m[1], b = +m[2], c = m[3];
+    var anio, dia, mes;
+    if(a.length===4){ anio = +a; dia = +c; mes = b; } // AAAA-MM-DD
+    else {
+      anio = +c; if(String(c).length===2) anio = 2000+(+c);
+      var x = +a, y = b;
+      if(x>12 && y<=12){ dia = x; mes = y; }
+      else if(y>12 && x<=12){ dia = y; mes = x; }
+      else { dia = x; mes = y; } // ambos <=12: asumimos DD/MM/AAAA
+    }
+    if(mes<1 || mes>12 || dia<1 || dia>31 || anio<1970 || anio>2100) return null;
+    return anio+'-'+String(mes).padStart(2,'0')+'-'+String(dia).padStart(2,'0');
+  }
   function parseHistCsv(text){
     var raw = String(text||'').replace(/^﻿/, '').split(/\r\n|\n|\r/).filter(function(l){ return l.length; });
     if(!raw.length) return { rows:[], errors:['El archivo está vacío.'] };
@@ -204,9 +228,9 @@
       var cols = parseHistCsvLine(raw[i], delim);
       var rowNum = i+1;
       var cliente = cols[0]||'', tipo = cols[1]||'', proyecto = cols[2]||'', cantidad = cols[3]||'', precio = cols[4]||'',
-        fSol = (cols[5]||'').slice(0,10), fReq = (cols[6]||'').slice(0,10), fAct = (cols[7]||'').slice(0,10),
+        fSolRaw = cols[5]||'', fReqRaw = cols[6]||'', fActRaw = cols[7]||'',
         estado = (cols[8]||'activado').toLowerCase().trim() || 'activado', gestor = cols[9]||'';
-      if(!cliente || !tipo || !cantidad || !precio || !fSol || !fReq){
+      if(!cliente || !tipo || !cantidad || !precio || !fSolRaw || !fReqRaw){
         errors.push('Fila '+rowNum+': faltan datos obligatorios (cliente, tipo, cantidad, precio, fecha de solicitud o fecha requerida).');
         continue;
       }
@@ -214,13 +238,13 @@
         errors.push('Fila '+rowNum+': estado "'+estado+'" no reconocido (usar: '+ESTADOS.join(', ')+').');
         continue;
       }
-      if(estado==='activado' && !fAct){
+      if(estado==='activado' && !fActRaw){
         errors.push('Fila '+rowNum+': estado "activado" requiere fecha de activación.');
         continue;
       }
-      var fechaOk = /^\d{4}-\d{2}-\d{2}$/;
-      if(!fechaOk.test(fSol) || !fechaOk.test(fReq) || (fAct && !fechaOk.test(fAct))){
-        errors.push('Fila '+rowNum+': las fechas deben tener formato AAAA-MM-DD.');
+      var fSol = parseFlexibleDate(fSolRaw), fReq = parseFlexibleDate(fReqRaw), fAct = fActRaw ? parseFlexibleDate(fActRaw) : '';
+      if(!fSol || !fReq || (fActRaw && !fAct)){
+        errors.push('Fila '+rowNum+': no se pudo interpretar alguna fecha (usar DD/MM/AAAA).');
         continue;
       }
       var qty = parseInt(cantidad,10);
@@ -1980,7 +2004,7 @@
       render();
     },
     downloadHistTemplate: function(){
-      var ejemplo = ['TARJETAS PERUANAS','Google Workspace Business Plus','tarjetasperuanas.com.pe','200','22.00','2026-08-01','2026-08-05','2026-08-05','activado','Stefano Borckardt'];
+      var ejemplo = ['TARJETAS PERUANAS','Google Workspace Business Plus','tarjetasperuanas.com.pe','200','22.00','01/08/2026','05/08/2026','05/08/2026','activado','Stefano Borckardt'];
       downloadCsv('plantilla_historico_licencias.csv', HIST_CSV_HEADER.join(';')+'\n'+ejemplo.join(';'));
     },
     handleImportHistFile: function(input){
