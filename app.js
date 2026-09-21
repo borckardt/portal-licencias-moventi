@@ -277,18 +277,19 @@
     if(!destinos.length) return false;
 
     var subject = 'Licencia activada — ' + r.licenseTypeName + ' (' + (r.quantity||1) + ')';
-    var text = 'Hola,\n\nConfirmamos que la licencia solicitada ya se encuentra ACTIVA:\n\n' +
+    var text = 'Estimado Cliente,\n\nSe le informa que el siguiente pedido de licencias ha sido generado y activado:\n\n' +
       '- Cliente: ' + r.clientName + '\n' +
       '- Tipo: ' + r.licenseTypeName + '\n' +
       '- Proyecto: ' + (r.project||'—') + '\n' +
       '- Cantidad: ' + (r.quantity||1) + '\n' +
       '- Fecha de activación solicitada: ' + fmtDateShort(r.neededFrom) + '\n' +
-      '- Habilitada desde: ' + fmtDateShort(r.activatedAt||r.neededFrom) + '\n' +
+      '- Activada el: ' + fmtDateShort(r.activatedAt||r.neededFrom) + '\n' +
       '\nSaludos,\nMoventi';
     var html = '<div style="font-family:Arial,sans-serif;font-size:14px">' +
-      '<p>Confirmamos que la licencia solicitada ya se encuentra <strong>activa</strong>:</p>' +
+      '<p>Estimado Cliente,</p>' +
+      '<p>Se le informa que el siguiente pedido de licencias ha sido generado y activado:</p>' +
       '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;margin:.4em 0">' +
-      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Fecha de Activación</th><th style="padding:6px 10px;text-align:left">Habilitada desde</th></tr>' +
+      '<tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Cliente</th><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:left">Proyecto</th><th style="padding:6px 10px;text-align:center">Cantidad</th><th style="padding:6px 10px;text-align:left">Fecha de Activación</th><th style="padding:6px 10px;text-align:left">Activada el</th></tr>' +
       '<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.clientName)+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.licenseTypeName)+'</td>' +
       '<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">'+esc(r.project||'—')+'</td>' +
@@ -938,7 +939,7 @@
              visibles.length===0 ? '<div class="table-empty">No hay solicitudes de este proyecto.</div>' :
             '<div class="table-fit"><table class="table-client"><thead><tr>' +
               '<th>Tipo</th><th>Proyecto</th><th>Cant.</th><th>Precio</th><th>Estado</th>' +
-              '<th>Solicitada</th><th>Activación</th><th>Habilitada</th>' +
+              '<th>Solicitada</th><th>Activación</th><th>Activada el</th>' +
             '</tr></thead><tbody>'+rows+'</tbody></table></div>') +
           '</div>' +
         '</div>' +
@@ -1100,7 +1101,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes con estos filtros.</div>' :
-      '<div class="table-wrap no-scrollbar"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Precio</th><th>Prorrateo</th><th>Estado</th><th>Habilitada desde</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap no-scrollbar"><table class="table-dense"><thead><tr><th></th><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Precio</th><th>Prorrateo</th><th>Estado</th><th>Activada el</th><th>Envío</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -1482,7 +1483,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Estado</th><th>Precio</th><th>Prorrateo</th><th>Habilitada desde</th><th>Gestionado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha solicitada</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha de Activación</th><th>Estado</th><th>Precio</th><th>Prorrateo</th><th>Activada el</th><th>Gestionado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -2276,11 +2277,11 @@
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
       function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha solicitada','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha de Activación','Estado','Precio total (US$)','Habilitada desde','Prorrateo (US$)','Días prorrateados','Fecha autorizada','Gestionado por'];
+      var header = ['Fecha solicitada','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha de Activación','Estado','Precio total (US$)','Activada el','Prorrateo (US$)','Días prorrateados','Gestionado por'];
       var lines = [header.join(';')];
       list.forEach(function(r){
         var pr = prorrateo(r);
-        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.activatedAt||'', pr?pr.monto.toFixed(2):'', pr?(pr.dias+'/'+pr.delMes):'', r.reviewedAt?dateOnly(r.reviewedAt):'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
+        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.activatedAt||'', pr?pr.monto.toFixed(2):'', pr?(pr.dias+'/'+pr.delMes):'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
       });
       var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+reqTotal(r);},0);
       lines.push('');
