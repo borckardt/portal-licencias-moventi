@@ -501,6 +501,22 @@
   }
   // Monto total final: precio unitario final (prorrateado o completo) x cantidad.
   function montoTotal(r){ return precioUnitFinal(r) * Number(r.quantity||1); }
+  // Fecha de vencimiento: las licencias son anuales, vencen 1 año después de
+  // la fecha de activación (o la requerida, si aún no se ha activado).
+  function fechaVencimiento(r){
+    var ymd = String(r.activatedAt || r.neededFrom || '').slice(0,10);
+    var p = ymd.split('-'); if(p.length!==3) return null;
+    var anio = +p[0], mes = +p[1], dia = +p[2];
+    var d = new Date(anio, mes-1, dia);
+    d.setFullYear(d.getFullYear()+1);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  function vencimientoCell(r){
+    var v = fechaVencimiento(r);
+    if(!v) return '<span style="color:var(--ink-subtle)">—</span>';
+    var base = r.activatedAt ? '' : ' · estimado sobre fecha requerida (se recalcula al activar)';
+    return '<span title="Vence 1 año después de la activación'+base+'">'+fmtDateShort(v)+'</span>';
+  }
   function puedeEnviarse(r){ return (r.status==='pendiente' || r.status==='aprobado') && !r.notifiedToIngram; }
   function esAprobada(r){ return r.status==='aprobado' || r.status==='en proceso' || r.status==='activado'; }
   function fmtDate(iso){ if(!iso) return '—'; var d = new Date(iso); return d.toLocaleDateString('es-PE', {day:'2-digit', month:'short', year:'numeric'}); }
@@ -1627,6 +1643,7 @@
           '<td class="num">'+precioUnitCell(r)+'</td>' +
           '<td class="num">'+money(montoTotal(r))+'</td>' +
           '<td class="num"><input class="mini-input" id="edit-actdate-'+r.id+'" type="date" value="'+(dateOnly(r.activatedAt)||'')+'" /></td>' +
+          '<td class="num">'+vencimientoCell(r)+'</td>' +
           '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
         '</tr>';
       }
@@ -1641,6 +1658,7 @@
         '<td class="num">'+precioUnitCell(r)+'</td>' +
         '<td class="num">'+money(montoTotal(r))+'</td>' +
         '<td class="num">'+activadaCell(r)+'</td>' +
+        '<td class="num">'+vencimientoCell(r)+'</td>' +
         '<td>'+buildRowMenu(r.id, [
           {label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"},
           {label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"}
@@ -1697,7 +1715,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Estado</th><th title="Ya prorrateado desde la fecha de activación cuando aplica">Precio unitario</th><th>Monto total</th><th>Fecha de activación</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th title="Fecha de solicitud">Solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th title="Fecha requerida">Requerida</th><th>Estado</th><th title="Ya prorrateado desde la fecha de activación cuando aplica">Precio unitario</th><th>Monto total</th><th title="Fecha de activación">Activación</th><th title="Las licencias son anuales: vence 1 año después de la activación">Vencimiento</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
@@ -2567,10 +2585,10 @@
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
       function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio unitario (US$)','Monto total (US$)','Fecha de activación','Gestionado por'];
+      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio unitario (US$)','Monto total (US$)','Fecha de activación','Fecha de vencimiento','Gestionado por'];
       var lines = [header.join(';')];
       list.forEach(function(r){
-        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, precioUnitFinal(r).toFixed(2), montoTotal(r).toFixed(2), r.activatedAt||'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
+        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, precioUnitFinal(r).toFixed(2), montoTotal(r).toFixed(2), r.activatedAt||'', fechaVencimiento(r)||'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
       });
       var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+reqTotal(r);},0);
       lines.push('');

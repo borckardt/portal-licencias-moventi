@@ -169,8 +169,8 @@
   /* Oculta la barra de scroll visual (sigue siendo desplazable) */
   .no-scrollbar{ scrollbar-width:none; -ms-overflow-style:none; }
   .no-scrollbar::-webkit-scrollbar{ display:none; height:0; }
-  .table-dense th{ padding:.45em .24em; font-size:.6rem; text-align:center; }
-  .table-dense td{ padding:.45em .24em; font-size:.77rem; white-space:nowrap; text-align:center; }
+  .table-dense th{ padding:.45em .18em; font-size:.6rem; text-align:center; }
+  .table-dense td{ padding:.45em .18em; font-size:.77rem; white-space:nowrap; text-align:center; }
   /* Nombre/tipo/proyecto: una sola línea con "..." y tooltip (evita que se
      partan en varias líneas y desordenen la fila). */
   .table-dense td.wrap{ text-align:center; }
@@ -496,8 +496,8 @@
   .mini-input:focus, .mini-select:focus{ border-color:var(--accent); }
   /* Los <input type=date> en filas de edición necesitan menos ancho mínimo
      para que la fila no desborde la tabla al agregar varias fechas editables. */
-  .mini-input[type="date"]{ min-width:0; width:92px; font-size:.66rem; padding:.28em .12em; }
-  tr.editing-row .btn-sm{ padding:.3em .45em; font-size:.72rem; }
-  tr.editing-row td{ padding-left:.14em; padding-right:.14em; }
-  tr.editing-row .mini-select{ min-width:64px; }
+  .mini-input[type="date"]{ min-width:0; width:78px; font-size:.6rem; padding:.28em .08em; }
+  tr.editing-row .btn-sm{ padding:.26em .3em; font-size:.66rem; }
+  tr.editing-row td{ padding-left:.1em; padding-right:.1em; }
+  tr.editing-row .mini-select{ min-width:60px; }
   tr.editing-row{ background:var(--accent-soft); }
