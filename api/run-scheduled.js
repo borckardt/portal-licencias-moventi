@@ -1,6 +1,7 @@
 // Envío programado de solicitudes a Ingram. Lo dispara el cron de Vercel una
 // vez al día (ver "crons" en vercel.json): busca las solicitudes aprobadas que
-// el admin dejó programadas (scheduledSend) con fecha de hoy o anterior, manda
+// el admin dejó programadas (scheduledSend, aún sin enviar) con fecha de hoy o
+// anterior, manda
 // UN correo con todas ellas al contacto configurado, las marca como enviadas y
 // avisa por correo a los destinatarios de la pestaña Notificaciones.
 //
@@ -90,7 +91,7 @@ module.exports = async function handler(req, res) {
   var settings = state.settings || {};
   var today = ymdLima();
   var due = state.requests.filter(function (r) {
-    return r.status === 'aprobado' && !r.notifiedToIngram && r.scheduledSend &&
+    return (r.status === 'pendiente' || r.status === 'aprobado') && !r.notifiedToIngram && r.scheduledSend &&
       String(r.scheduledSend).slice(0, 10) <= today;
   });
 
