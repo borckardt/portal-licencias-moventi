@@ -268,7 +268,7 @@
   function prorrateoCell(r){
     var pr = prorrateo(r);
     if(!pr) return '<span style="color:var(--ink-subtle)">—</span>';
-    return '<span title="'+pr.dias+' de '+pr.delMes+' días · unitario prorrateado '+money(pr.unitario)+'">'+money(pr.monto)+'</span>';
+    return '<span title="'+pr.dias+' de '+pr.delMes+' días · total prorrateado '+money(pr.monto)+'">'+money(pr.unitario)+'</span>';
   }
   // Fecha de activación + quién la gestionó, en una sola celda (ahorra una columna).
   function activadaCell(r){
@@ -2290,11 +2290,11 @@
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
       function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio total (US$)','Fecha de activación','Prorrateo (US$)','Días prorrateados','Gestionado por'];
+      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio total (US$)','Fecha de activación','Prorrateo unitario (US$)','Días prorrateados','Gestionado por'];
       var lines = [header.join(';')];
       list.forEach(function(r){
         var pr = prorrateo(r);
-        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.activatedAt||'', pr?pr.monto.toFixed(2):'', pr?(pr.dias+'/'+pr.delMes):'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
+        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, reqTotal(r), r.activatedAt||'', pr?pr.unitario.toFixed(2):'', pr?(pr.dias+'/'+pr.delMes):'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
       });
       var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+reqTotal(r);},0);
       lines.push('');
