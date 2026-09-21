@@ -40,6 +40,13 @@ async function buildAllowlist() {
         });
       }
     }
+    // Correos de aviso de los clientes (pestaña Clientes): los usa el aviso
+    // de "licencia activada" que se manda al cliente.
+    if (Array.isArray(state && state.users)) {
+      state.users.forEach(function (u) {
+        if (u && u.email) allow.push(String(u.email).trim().toLowerCase());
+      });
+    }
   } catch (e) { /* si falla la lectura, seguimos solo con las internas */ }
   return allow;
 }

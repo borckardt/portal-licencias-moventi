@@ -148,6 +148,7 @@ module.exports = async function handler(req, res) {
       r.notifiedAt = nowIso;
       r.notifiedBy = 'Envío programado';
       r.scheduledSentAt = nowIso;
+      r.status = 'en proceso';
     }
   });
   try {
