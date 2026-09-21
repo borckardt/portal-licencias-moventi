@@ -169,9 +169,12 @@
   /* Oculta la barra de scroll visual (sigue siendo desplazable) */
   .no-scrollbar{ scrollbar-width:none; -ms-overflow-style:none; }
   .no-scrollbar::-webkit-scrollbar{ display:none; height:0; }
-  .table-dense th{ padding:.6em .65em; font-size:.66rem; }
-  .table-dense td{ padding:.65em .65em; font-size:.83rem; white-space:nowrap; }
-  .table-dense td.wrap{ white-space:normal; max-width:170px; }
+  .table-dense th{ padding:.45em .32em; font-size:.6rem; text-align:center; }
+  .table-dense td{ padding:.45em .32em; font-size:.77rem; white-space:nowrap; text-align:center; }
+  /* Nombre/tipo/proyecto: una sola línea con "..." y tooltip (evita que se
+     partan en varias líneas y desordenen la fila). */
+  .table-dense td.wrap{ text-align:center; }
+  .cell-clip{ display:inline-block; max-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:middle; }
   .table-empty{ padding:2.5em 1em; text-align:center; color:var(--ink-subtle); font-size:.9rem; }
 
   /* ---------- tabla de "Mis solicitudes" (vista cliente) ----------

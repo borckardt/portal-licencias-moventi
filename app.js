@@ -259,10 +259,22 @@
     return ok;
   }
 
+  // Texto largo (nombre de cliente, licencia, dominio de proyecto) en una sola
+  // línea con "..." y tooltip, en vez de partirse en varias líneas feas.
+  function clipCell(text){
+    var t = String(text==null?'':text);
+    return '<span class="cell-clip" title="'+esc(t)+'">'+esc(t)+'</span>';
+  }
   function prorrateoCell(r){
     var pr = prorrateo(r);
     if(!pr) return '<span style="color:var(--ink-subtle)">—</span>';
     return '<span title="'+pr.dias+' de '+pr.delMes+' días · unitario prorrateado '+money(pr.unitario)+'">'+money(pr.monto)+'</span>';
+  }
+  // Fecha de activación + quién la gestionó, en una sola celda (ahorra una columna).
+  function activadaCell(r){
+    if(!r.activatedAt) return '<span style="color:var(--ink-subtle)">—</span>';
+    var quien = r.activatedBy||r.notifiedBy||'';
+    return fmtDateShort(r.activatedAt) + (quien ? '<br><span style="color:var(--ink-subtle);font-size:.7rem">'+esc(quien)+'</span>' : '');
   }
   // Aviso de "licencia activada": va al correo del cliente (pestaña Clientes)
   // con copia a los buzones internos de Notificaciones.
@@ -1014,8 +1026,8 @@
         var projectOptionsEdit = projectOptionsHtml(projectNames(false, r.project), r.project);
         return '<tr class="editing-row" id="req-row-'+r.id+'">' +
           '<td></td>' +
-          '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
-          '<td class="wrap">'+esc(r.clientName)+'</td>' +
+          '<td class="num">'+fmtDateShort(r.requestedAt)+'</td>' +
+          '<td class="wrap">'+clipCell(r.clientName)+'</td>' +
           '<td class="wrap"><select class="mini-select" id="edit-type-'+r.id+'">'+typeOptions+'</select></td>' +
           '<td class="wrap"><select class="mini-select" id="edit-project-'+r.id+'">'+projectOptionsEdit+'</select></td>' +
           '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
@@ -1042,7 +1054,7 @@
       menuItems.push({label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"});
       var actions = (r.status==='en proceso'
         ? '<button class="btn btn-success btn-sm" onclick="App.markActivated(\''+r.id+'\')">Notificar activación</button> '
-        : '<span style="color:var(--ink-subtle);font-size:.78rem">'+esc(r.activatedBy||r.notifiedBy||'')+'</span> ') +
+        : '') +
         buildRowMenu(r.id, menuItems);
       var checkbox = puedeEnviarse(r)
         ? '<input type="checkbox" '+(selectedForIngram.has(r.id)?'checked':'')+' onchange="App.toggleIngramSelect(\''+r.id+'\', this.checked)" />'
@@ -1055,10 +1067,10 @@
             : '<span class="pill status-sinenviar">Pendiente</span>');
       return '<tr id="req-row-'+r.id+'">' +
         '<td>'+checkbox+'</td>' +
-        '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
-        '<td class="wrap">'+esc(r.clientName)+'</td>' +
-        '<td class="wrap">'+esc(r.licenseTypeName)+'</td>' +
-        '<td class="wrap">'+esc(r.project||'—')+'</td>' +
+        '<td class="num">'+fmtDateShort(r.requestedAt)+'</td>' +
+        '<td class="wrap">'+clipCell(r.clientName)+'</td>' +
+        '<td class="wrap">'+clipCell(r.licenseTypeName)+'</td>' +
+        '<td class="wrap">'+clipCell(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td class="num">'+money(reqTotal(r))+'</td>' +
@@ -1404,8 +1416,8 @@
         var typeOptionsR = allTypesReporte.map(function(t){ return '<option value="'+t.id+'" '+(t.id===r.licenseTypeId?'selected':'')+'>'+esc(t.name)+'</option>'; }).join('');
         var projectOptionsR = projectOptionsHtml(projectNames(false, r.project), r.project);
         return '<tr class="editing-row">' +
-          '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
-          '<td class="wrap">'+esc(r.clientName)+'</td>' +
+          '<td class="num">'+fmtDateShort(r.requestedAt)+'</td>' +
+          '<td class="wrap">'+clipCell(r.clientName)+'</td>' +
           '<td class="wrap"><select class="mini-select" id="edit-type-'+r.id+'">'+typeOptionsR+'</select></td>' +
           '<td class="wrap"><select class="mini-select" id="edit-project-'+r.id+'">'+projectOptionsR+'</select></td>' +
           '<td class="num"><div class="num-field"><input class="mini-input" id="edit-qty-'+r.id+'" type="number" min="1" step="1" value="'+(r.quantity||1)+'" />'+numStepper('edit-qty-'+r.id,1)+'</div></td>' +
@@ -1413,23 +1425,21 @@
           '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
           '<td class="num">'+money(reqTotal(r))+'</td>' +
           '<td class="num">'+prorrateoCell(r)+'</td>' +
-          '<td class="num">'+(r.activatedAt ? fmtDateShort(r.activatedAt) : '—')+'</td>' +
-          '<td style="color:var(--ink-subtle)">'+esc(r.activatedBy||r.notifiedBy||'—')+'</td>' +
+          '<td class="num">'+activadaCell(r)+'</td>' +
           '<td><button class="btn btn-success btn-sm" onclick="App.saveEditRequest(\''+r.id+'\')">Guardar</button> <button class="btn btn-subtle btn-sm" onclick="App.cancelEditRequest()">Cancelar</button></td>' +
         '</tr>';
       }
       return '<tr>' +
-        '<td class="num">'+fmtDate(r.requestedAt)+'</td>' +
-        '<td class="wrap">'+esc(r.clientName)+'</td>' +
-        '<td class="wrap">'+esc(r.licenseTypeName)+'</td>' +
-        '<td class="wrap">'+esc(r.project||'—')+'</td>' +
+        '<td class="num">'+fmtDateShort(r.requestedAt)+'</td>' +
+        '<td class="wrap">'+clipCell(r.clientName)+'</td>' +
+        '<td class="wrap">'+clipCell(r.licenseTypeName)+'</td>' +
+        '<td class="wrap">'+clipCell(r.project||'—')+'</td>' +
         '<td class="num">'+(r.quantity||1)+'</td>' +
         '<td class="num">'+fmtDateShort(r.neededFrom)+'</td>' +
         '<td><span class="pill '+statusCls(r.status)+'">'+r.status+'</span></td>' +
         '<td class="num">'+money(reqTotal(r))+'</td>' +
         '<td class="num">'+prorrateoCell(r)+'</td>' +
-        '<td class="num">'+(r.activatedAt ? fmtDateShort(r.activatedAt) : '—')+'</td>' +
-        '<td style="color:var(--ink-subtle)">'+esc(r.activatedBy||r.notifiedBy||'—')+'</td>' +
+        '<td class="num">'+activadaCell(r)+'</td>' +
         '<td>'+buildRowMenu(r.id, [
           {label:'Editar', onclick:"App.startEditRequest('"+r.id+"')"},
           {label:'Eliminar', cls:'rm-danger', onclick:"App.removeRequest('"+r.id+"')"}
@@ -1475,7 +1485,7 @@
       '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Proyecto</th><th>Solicitudes</th><th>Aprobadas</th><th>Monto aprobado</th></tr></thead><tbody>' +
         projectBreakdown.map(function(pb){
           return '<tr>' +
-            '<td class="wrap">'+esc(pb.project)+'</td>' +
+            '<td class="wrap">'+clipCell(pb.project)+'</td>' +
             '<td class="num">'+pb.count+'</td>' +
             '<td class="num">'+pb.aprobadas+'</td>' +
             '<td class="num">'+money(pb.monto)+'</td>' +
@@ -1486,7 +1496,7 @@
     '</div>' +
     '<div class="card">' +
       (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
-      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Estado</th><th>Precio</th><th>Prorrateo</th><th>Fecha de activación</th><th>Gestionado por</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
+      '<div class="table-wrap"><table class="table-dense"><thead><tr><th>Fecha de solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th>Fecha requerida</th><th>Estado</th><th>Precio</th><th>Prorrateo</th><th>Fecha de activación</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
 
