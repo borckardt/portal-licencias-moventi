@@ -920,6 +920,23 @@
     }
   }
 
+  // Descarga un archivo binario (usado para el .xlsx del Reporte) via Blob +
+  // link temporal. No usa downloadsCap: ese capability solo maneja texto y
+  // este portal, desplegado en Vercel, siempre corre como navegador normal.
+  function downloadBinary(filename, arrayBuffer, mime){
+    try{
+      var blob = new Blob([arrayBuffer], {type: mime});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+      showToast('Descarga iniciada.', 'success');
+    }catch(e){
+      showToast('No se pudo generar la descarga.', 'error');
+    }
+  }
+
   /* ================= login ================= */
   async function tryLogin(username, password){
     if(loginRole==='admin'){
@@ -1621,7 +1638,7 @@
       '<div class="field"><label>Proyecto</label><select onchange="App.setReportFilter(\'proyecto\', this.value)">' +
         '<option value="todos">Todos</option>' + projectOptionsHtml(projectNames(false), reportFilter.proyecto) +
       '</select></div>' +
-      '<button class="btn btn-primary" style="margin-left:auto" onclick="App.exportReport()">Descargar reporte (CSV)</button>' +
+      '<button class="btn btn-primary" style="margin-left:auto" onclick="App.exportReport()">Descargar reporte (Excel)</button>' +
     '</div>' +
     '<div class="stat-row" style="margin-bottom:1.2rem">' +
       '<div class="stat-tile"><div class="label">Solicitudes</div><div class="value">'+totalSolicitudes+'</div></div>' +
@@ -2403,7 +2420,7 @@
     },
 
     setReportFilter: function(k,v){ reportFilter[k]=v; saveUiState(); render(); },
-    exportReport: function(){
+    exportReport: async function(){
       var list = STATE.requests.filter(function(r){
         if(reportFilter.cliente!=='todos' && r.clientUsername!==reportFilter.cliente) return false;
         if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
@@ -2411,18 +2428,157 @@
         if(reportFilter.proyecto!=='todos' && r.project!==reportFilter.proyecto) return false;
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
-      function csvField(v){ var s = String(v==null?'':v); if(/[;"\n]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"'; return s; }
-      var header = ['Fecha de solicitud','Cliente','Tipo de licencia','Proyecto','Cantidad','Fecha requerida','Estado','Precio unitario (US$)','Monto total (US$)','Fecha de activación','Fecha de vencimiento','Gestionado por'];
-      var lines = [header.join(';')];
-      list.forEach(function(r){
-        lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, precioUnitFinal(r).toFixed(2), montoTotal(r).toFixed(2), r.activatedAt||'', fechaVencimiento(r)||'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
+
+      if(typeof ExcelJS==='undefined'){
+        showToast('No se pudo cargar el generador de Excel.', 'error');
+        return;
+      }
+
+      // Etiquetas legibles de los filtros activos, para el encabezado del reporte.
+      var clientesAll = STATE.users.filter(function(u){ return u.role==='client'; });
+      var clienteLabel = reportFilter.cliente==='todos' ? 'Todos'
+        : (clientesAll.find(function(c){ return c.username===reportFilter.cliente; })||{}).name || reportFilter.cliente;
+      var estadoLabel = reportFilter.estado==='todos' ? 'Todos' : reportFilter.estado;
+      var tipoLabel = reportFilter.tipo==='todos' ? 'Todos'
+        : (STATE.licenseTypes.find(function(t){ return t.id===reportFilter.tipo; })||{}).name || reportFilter.tipo;
+      var proyectoLabel = reportFilter.proyecto==='todos' ? 'Todos' : reportFilter.proyecto;
+
+      var aprobadasList = list.filter(esAprobada);
+      var totalAprobado = aprobadasList.reduce(function(s,r){ return s + montoTotal(r); }, 0);
+      var totalLicencias = list.reduce(function(s,r){ return s + Number(r.quantity||1); }, 0);
+      var generadoEl = new Date().toLocaleString('es-PE', {dateStyle:'long', timeStyle:'short'});
+
+      // Paleta de marca Moventi (misma que se usa en los reportes Word).
+      var C = { dark:'FF1A2535', teal:'FF00C8B4', tealDark:'FF009B8B', gray:'FF6B7280',
+        white:'FFFFFFFF', lightGray:'FFF2F4F6', lightTeal:'FFE6FBF8', midGray:'FFD1D5DB' };
+      var MONEY_FMT = '"US$" #,##0.00';
+
+      var wb = new ExcelJS.Workbook();
+      wb.creator = 'Portal de Licencias — Moventi';
+      wb.created = new Date();
+
+      /* ---------- Hoja 1: Resumen ---------- */
+      var rs = wb.addWorksheet('Resumen', { views:[{ showGridLines:false }] });
+      rs.columns = [{width:34},{width:22},{width:22},{width:22}];
+
+      rs.mergeCells('A1:D1');
+      rs.getCell('A1').value = 'Reporte de Licencias';
+      rs.getCell('A1').font = { bold:true, size:16, color:{argb:C.dark} };
+
+      rs.mergeCells('A2:D2');
+      rs.getCell('A2').value = 'Cliente: '+clienteLabel+'  ·  Estado: '+estadoLabel+'  ·  Tipo: '+tipoLabel+'  ·  Proyecto: '+proyectoLabel;
+      rs.getCell('A2').font = { size:10, color:{argb:C.gray} };
+
+      rs.mergeCells('A3:D3');
+      rs.getCell('A3').value = 'Generado: '+generadoEl;
+      rs.getCell('A3').font = { size:10, italic:true, color:{argb:C.gray} };
+
+      rs.getCell('A5').value = 'Total de solicitudes';
+      rs.getCell('A5').font = { bold:true, color:{argb:C.dark} };
+      rs.getCell('B5').value = list.length;
+      rs.getCell('B5').alignment = { horizontal:'right' };
+
+      rs.getCell('A6').value = 'Licencias aprobadas / vigentes';
+      rs.getCell('A6').font = { bold:true, color:{argb:C.dark} };
+      rs.getCell('B6').value = aprobadasList.length;
+      rs.getCell('B6').alignment = { horizontal:'right' };
+
+      rs.getCell('A7').value = 'Cantidad total de licencias';
+      rs.getCell('A7').font = { bold:true, color:{argb:C.dark} };
+      rs.getCell('B7').value = totalLicencias;
+      rs.getCell('B7').alignment = { horizontal:'right' };
+
+      rs.mergeCells('A9:B9');
+      rs.getCell('A9').value = 'MONTO TOTAL (US$)';
+      rs.mergeCells('C9:D9');
+      rs.getCell('C9').value = totalAprobado;
+      rs.getCell('C9').numFmt = MONEY_FMT;
+      ['A9','B9','C9','D9'].forEach(function(ref){
+        rs.getCell(ref).fill = { type:'pattern', pattern:'solid', fgColor:{argb:C.teal} };
+        rs.getCell(ref).font = { bold:true, size:14, color:{argb:C.white} };
       });
-      var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+montoTotal(r);},0);
-      lines.push('');
-      lines.push(['Total solicitudes', list.length].map(csvField).join(';'));
-      lines.push(['Monto aprobado', totalAprobado.toFixed(2)].map(csvField).join(';'));
-      var fname = 'reporte_licencias_'+todayYmd()+'.csv';
-      downloadCsv(fname, lines.join('\n'));
+      rs.getCell('A9').alignment = { vertical:'middle' };
+      rs.getCell('C9').alignment = { vertical:'middle', horizontal:'right' };
+      rs.getRow(9).height = 26;
+
+      rs.mergeCells('A11:D13');
+      rs.getCell('A11').value = 'Este es el valor a utilizar del reporte: ya incluye el prorrateo de las '+
+        'licencias activadas dentro del mes en curso (precio de lista / 30 x días restantes). '+
+        'Corresponde exactamente a la suma de la columna "Monto total (US$)" de la hoja Detalle.';
+      rs.getCell('A11').font = { size:10, italic:true, color:{argb:C.gray} };
+      rs.getCell('A11').alignment = { wrapText:true, vertical:'top' };
+
+      /* ---------- Hoja 2: Detalle ---------- */
+      var ws = wb.addWorksheet('Detalle', { views:[{ state:'frozen', ySplit:1 }] });
+      var cols = [
+        {header:'Fecha de solicitud', key:'fsol', width:14},
+        {header:'Cliente', key:'cli', width:26},
+        {header:'Tipo de licencia', key:'tipo', width:28},
+        {header:'Proyecto', key:'proy', width:20},
+        {header:'Cantidad', key:'cant', width:10},
+        {header:'Fecha requerida', key:'freq', width:14},
+        {header:'Estado', key:'est', width:12},
+        {header:'Precio unitario (US$)', key:'punit', width:16},
+        {header:'MONTO TOTAL (US$)', key:'mtotal', width:18},
+        {header:'Fecha de activación', key:'fact', width:14},
+        {header:'Fecha de vencimiento', key:'fven', width:16},
+        {header:'Gestionado por', key:'gest', width:20}
+      ];
+      ws.columns = cols;
+      var MONTO_COL = 9; // índice 1-based de "MONTO TOTAL (US$)"
+
+      var headerRow = ws.getRow(1);
+      headerRow.eachCell(function(cell, colNumber){
+        cell.font = { bold:true, color:{argb:C.white} };
+        cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb: colNumber===MONTO_COL ? C.tealDark : C.dark} };
+        cell.alignment = { vertical:'middle', horizontal: colNumber>=5 && colNumber<=9 ? 'right' : 'left' };
+      });
+      headerRow.getCell(MONTO_COL).note = 'Valor a utilizar: ya incluye el prorrateo cuando aplica.';
+      headerRow.height = 20;
+
+      list.forEach(function(r, idx){
+        var row = ws.addRow({
+          fsol: dateOnly(r.requestedAt)||'', cli: r.clientName, tipo: r.licenseTypeName,
+          proy: r.project||'', cant: Number(r.quantity||1), freq: r.neededFrom||'', est: r.status,
+          punit: precioUnitFinal(r), mtotal: montoTotal(r),
+          fact: r.activatedAt||'', fven: fechaVencimiento(r)||'', gest: r.activatedBy||r.notifiedBy||''
+        });
+        row.getCell(8).numFmt = MONEY_FMT; row.getCell(8).alignment = {horizontal:'right'};
+        row.getCell(9).numFmt = MONEY_FMT; row.getCell(9).alignment = {horizontal:'right'};
+        row.getCell(9).font = { bold:true, color:{argb:C.tealDark} };
+        row.getCell(9).fill = { type:'pattern', pattern:'solid', fgColor:{argb:C.lightTeal} };
+        row.getCell(5).alignment = {horizontal:'right'};
+        if(idx % 2 === 1){
+          [1,2,3,4,5,6,7,10,11,12].forEach(function(c){
+            row.getCell(c).fill = { type:'pattern', pattern:'solid', fgColor:{argb:C.lightGray} };
+          });
+        }
+      });
+      ws.autoFilter = { from:{row:1,column:1}, to:{row:1,column:cols.length} };
+
+      if(list.length){
+        ws.addRow([]);
+        var totRow = ws.addRow({ fsol:'Total de solicitudes en este reporte', cant:list.length });
+        totRow.getCell(1).font = { bold:true, color:{argb:C.dark} };
+        totRow.getCell(5).font = { bold:true };
+        totRow.getCell(5).alignment = { horizontal:'right' };
+
+        ws.mergeCells('A'+(totRow.number+1)+':H'+(totRow.number+1));
+        var granRow = ws.getRow(totRow.number+1);
+        granRow.getCell(1).value = 'MONTO TOTAL APROBADO (US$) — usar este valor';
+        granRow.getCell(MONTO_COL).value = totalAprobado;
+        granRow.getCell(MONTO_COL).numFmt = MONEY_FMT;
+        for(var c=1;c<=MONTO_COL;c++){
+          granRow.getCell(c).fill = { type:'pattern', pattern:'solid', fgColor:{argb:C.teal} };
+          granRow.getCell(c).font = { bold:true, color:{argb:C.white} };
+        }
+        granRow.getCell(MONTO_COL).alignment = { horizontal:'right' };
+        granRow.height = 22;
+      }
+
+      var buf = await wb.xlsx.writeBuffer();
+      var fname = 'reporte_licencias_'+todayYmd()+'.xlsx';
+      downloadBinary(fname, buf, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     }
   };
   window.App = App;
