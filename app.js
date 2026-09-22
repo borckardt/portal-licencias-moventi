@@ -160,14 +160,52 @@
     s.users.push(nuevo);
     return nuevo;
   }
+  // Normaliza el nombre de un tipo de licencia para comparar "el mismo
+  // concepto escrito distinto" (ej. Ingram nombra el SKU "... Annual
+  // Monthly" mientras que el tipo ya creado a mano se llama solo "...").
+  function normalizeLicenseTypeName(name){
+    return String(name||'').trim().toLowerCase().replace(/\s+annual\s+monthly\s*$/,'').replace(/\s+/g,' ').trim();
+  }
   function ensureHistLicenseType(s, name, price){
     var n = String(name||'').trim();
     if(!n) return null;
-    var t = s.licenseTypes.find(function(x){ return x.name.toLowerCase()===n.toLowerCase(); });
+    var norm = normalizeLicenseTypeName(n);
+    var t = s.licenseTypes.find(function(x){ return normalizeLicenseTypeName(x.name)===norm; });
     if(t) return t;
     var nuevo = { id: uid('lt'), name: n, price: Number(price)||0, active:true };
     s.licenseTypes.push(nuevo);
     return nuevo;
+  }
+  // Fusiona tipos de licencia que ya hayan quedado duplicados (mismo
+  // concepto, nombre distinto): reasigna las solicitudes del duplicado al
+  // tipo que se conserva y elimina el duplicado. Se ejecuta una vez al
+  // cargar el estado remoto, por si quedaron duplicados de antes de que
+  // ensureHistLicenseType empezara a normalizar el nombre.
+  function mergeDuplicateLicenseTypes(s){
+    if(!s || !Array.isArray(s.licenseTypes) || s.licenseTypes.length<2) return false;
+    var groups = {};
+    s.licenseTypes.forEach(function(t){
+      var key = normalizeLicenseTypeName(t.name);
+      (groups[key] = groups[key]||[]).push(t);
+    });
+    var changed = false, toRemove = [];
+    Object.keys(groups).forEach(function(key){
+      var group = groups[key];
+      if(group.length<2) return;
+      // Se conserva el nombre "corto" (sin "Annual Monthly"); si ninguno o
+      // todos lo tienen, se conserva el primero.
+      var keep = group.find(function(t){ return !/annual\s+monthly/i.test(t.name); }) || group[0];
+      group.forEach(function(t){
+        if(t.id===keep.id) return;
+        (s.requests||[]).forEach(function(r){
+          if(r.licenseTypeId===t.id){ r.licenseTypeId = keep.id; r.licenseTypeName = keep.name; }
+        });
+        toRemove.push(t.id);
+        changed = true;
+      });
+    });
+    if(toRemove.length) s.licenseTypes = s.licenseTypes.filter(function(t){ return toRemove.indexOf(t.id)===-1; });
+    return changed;
   }
   function ensureHistProject(s, name){
     var n = String(name||'').trim();
@@ -2635,6 +2673,15 @@
           // cuenta de cliente quedó con la contraseña en texto plano de
           // antes de este cambio, la migra a hash.
           migrateLegacyClientPasswords();
+          // Igual, por si quedaron tipos de licencia duplicados (mismo
+          // concepto con nombre distinto) de antes de normalizar el nombre.
+          if(mergeDuplicateLicenseTypes(STATE)){
+            saveLocalFallbackState();
+            saveRemoteState(STATE).then(function(){
+              baseRemoteState = JSON.parse(JSON.stringify(STATE));
+              if(currentUser()) render();
+            }).catch(function(e){ console.error(e); });
+          }
         } else {
           // El backend aún no tiene nada guardado (primera vez): lo
           // inicializamos con el estado semilla/actual de este navegador.
