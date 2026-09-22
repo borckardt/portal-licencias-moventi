@@ -57,8 +57,7 @@
   var loginError = '';
   var adminTab = 'solicitudes';
   var adminAccountState = { busy:false, done:false, error:'' };
-  var reportFilter = { from: null, to: null, cliente: 'todos', estado: 'todos', tipo: 'todos', proyecto: 'todos', quick: 'mes' };
-  var reportPicker = { open: false, step: 'from', cursor: null };
+  var reportFilter = { cliente: 'todos', estado: 'todos', tipo: 'todos', proyecto: 'todos' };
   var solFilter = { cliente: 'todos', estado: 'todos', proyecto: 'todos' };
   var selectedForIngram = new Set();
   var editingRequestId = null;
@@ -1488,16 +1487,6 @@
     '</div>';
   }
 
-  function quickRangeDates(key){
-    var now = new Date();
-    var y = now.getFullYear(), m = now.getMonth();
-    function ymd(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
-    if(key==='mes'){ return { from: ymd(new Date(y,m,1)), to: ymd(new Date(y,m+1,0)) }; }
-    if(key==='mes-ant'){ return { from: ymd(new Date(y,m-1,1)), to: ymd(new Date(y,m,0)) }; }
-    if(key==='trimestre'){ return { from: ymd(new Date(y,m-2,1)), to: ymd(new Date(y,m+1,0)) }; }
-    return { from: null, to: null };
-  }
-
   function numStepper(id, min){
     return '<span class="num-stepper">' +
       '<button type="button" tabindex="-1" onclick="App.stepNumber(\''+id+'\', 1, '+(min==null?'null':min)+')">&#9650;</button>' +
@@ -1510,74 +1499,6 @@
       '<line x1="12" y1="8" x2="12" y2="13"></line>'+
       '<line x1="12" y1="16" x2="12.01" y2="16"></line>'+
     '</svg>';
-  }
-  function calendarIconSvg(){
-    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+
-      '<rect x="3" y="4" width="18" height="18" rx="3"></rect>'+
-      '<line x1="16" y1="2" x2="16" y2="6"></line>'+
-      '<line x1="8" y1="2" x2="8" y2="6"></line>'+
-      '<line x1="3" y1="10" x2="21" y2="10"></line>'+
-    '</svg>';
-  }
-  function ymdFromParts(y,m,d){ return y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
-  function monthLabel(cursor){
-    var p = cursor.split('-'); var d = new Date(Number(p[0]), Number(p[1])-1, 1);
-    var s = d.toLocaleDateString('es-PE', {month:'long', year:'numeric'});
-    return s.charAt(0).toUpperCase() + s.slice(1);
-  }
-  function buildCalendarDays(cursor){
-    var p = cursor.split('-'); var y = Number(p[0]), m = Number(p[1])-1;
-    var startWeekday = new Date(y,m,1).getDay();
-    var daysInMonth = new Date(y,m+1,0).getDate();
-    var totalCells = Math.ceil((startWeekday+daysInMonth)/7)*7;
-    var cells = [];
-    for(var i=0;i<totalCells;i++){
-      var dayNum = i - startWeekday + 1;
-      var cellDate = new Date(y,m,dayNum);
-      cells.push({
-        ymd: ymdFromParts(cellDate.getFullYear(), cellDate.getMonth(), cellDate.getDate()),
-        day: cellDate.getDate(),
-        outside: dayNum<1 || dayNum>daysInMonth
-      });
-    }
-    return cells;
-  }
-  function renderDatePicker(){
-    if(!reportPicker.open) return '';
-    var cursor = reportPicker.cursor || (reportFilter.from || todayYmd()).slice(0,7);
-    var cells = buildCalendarDays(cursor);
-    var today = todayYmd();
-    var weekDays = ['DO','LU','MA','MI','JU','VI','SA'];
-    var from = reportFilter.from, to = reportFilter.to;
-    var rows = '';
-    for(var w=0; w<cells.length; w+=7){
-      rows += '<div class="cal-row">';
-      for(var i=w;i<w+7;i++){
-        var c = cells[i];
-        var cls = 'cal-day';
-        if(c.outside) cls += ' outside';
-        if(c.ymd===today) cls += ' today';
-        if(from && to && c.ymd>from && c.ymd<to) cls += ' in-range';
-        if(from && c.ymd===from) cls += ' range-start';
-        if(to && c.ymd===to) cls += ' range-end';
-        rows += '<button type="button" class="'+cls+'" onclick="App.pickReportDate(\''+c.ymd+'\')">'+c.day+'</button>';
-      }
-      rows += '</div>';
-    }
-    return '<div class="cal-overlay" onclick="App.closeDatePicker()"></div>' +
-    '<div class="cal-popover">' +
-      '<div class="cal-header">' +
-        '<button type="button" class="cal-nav" onclick="App.pickerNav(-1)">&#8249;</button>' +
-        '<div class="cal-month">'+monthLabel(cursor)+'</div>' +
-        '<button type="button" class="cal-nav" onclick="App.pickerNav(1)">&#8250;</button>' +
-      '</div>' +
-      '<div class="cal-weekdays">' + weekDays.map(function(w){ return '<span>'+w+'</span>'; }).join('') + '</div>' +
-      '<div class="cal-grid">' + rows + '</div>' +
-      '<div class="cal-footer">' +
-        '<button type="button" class="cal-link" onclick="App.clearReportRange()">Borrar</button>' +
-        '<button type="button" class="cal-link" onclick="App.reportRangeToday()">Hoy</button>' +
-      '</div>' +
-    '</div>';
   }
 
   function renderAdminNotificaciones(){
@@ -1618,15 +1539,8 @@
   }
 
   function renderAdminReporte(){
-    if(reportFilter.from===null && reportFilter.to===null && reportFilter.quick){
-      var qd = quickRangeDates(reportFilter.quick);
-      reportFilter.from = qd.from; reportFilter.to = qd.to;
-    }
     var clients = STATE.users.filter(function(u){ return u.role==='client'; });
     var list = STATE.requests.filter(function(r){
-      var reqDate = dateOnly(r.requestedAt);
-      if(reportFilter.from && reqDate < reportFilter.from) return false;
-      if(reportFilter.to && reqDate > reportFilter.to) return false;
       if(reportFilter.cliente!=='todos' && r.clientUsername!==reportFilter.cliente) return false;
       if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
       if(reportFilter.tipo!=='todos' && r.licenseTypeId!==reportFilter.tipo) return false;
@@ -1693,19 +1607,8 @@
       '</tr>';
     }).join('');
 
-    var quicks = [['mes','Este mes'],['mes-ant','Mes anterior'],['trimestre','Últimos 3 meses']];
-
-    return '<div class="section-head"><h2>Reporte</h2><p>Consulta la cantidad de licencias solicitadas y su aprobación por periodo.</p></div>' +
+    return '<div class="section-head"><h2>Reporte</h2><p>Consulta todas las licencias vigentes desde su activación, con su precio unitario y su monto.</p></div>' +
     '<div class="toolbar">' +
-      '<div class="field"><label>Periodo</label><div class="quick-range">' + quicks.map(function(q){
-        return '<button type="button" class="btn btn-subtle btn-sm '+(reportFilter.quick===q[0]?'active':'')+'" onclick="App.setReportQuick(\''+q[0]+'\')">'+q[1]+'</button>';
-      }).join('') + '</div></div>' +
-      '<div class="field"><label>Rango de fechas</label><div class="cal-trigger-wrap">' +
-        '<button type="button" class="cal-trigger" onclick="App.toggleDatePicker()">' + calendarIconSvg() +
-          '<span>' + (reportFilter.from||reportFilter.to ? (fmtDateShort(reportFilter.from)+' – '+fmtDateShort(reportFilter.to)) : 'Seleccionar rango') + '</span>' +
-        '</button>' +
-        renderDatePicker() +
-      '</div></div>' +
       '<div class="field"><label>Cliente</label><select onchange="App.setReportFilter(\'cliente\', this.value)">' +
         '<option value="todos">Todos</option>' + clients.map(function(c){ return '<option value="'+c.username+'" '+(reportFilter.cliente===c.username?'selected':'')+'>'+esc(c.name)+'</option>'; }).join('') +
       '</select></div>' +
@@ -1741,7 +1644,7 @@
       '</tbody></table></div>' +
     '</div>' +
     '<div class="card">' +
-      (list.length===0 ? '<div class="table-empty">No hay solicitudes en este periodo.</div>' :
+      (list.length===0 ? '<div class="table-empty">No hay solicitudes con estos filtros.</div>' :
       '<div class="table-wrap"><table class="table-dense"><thead><tr><th title="Fecha de solicitud">Solicitud</th><th>Cliente</th><th>Tipo</th><th>Proyecto</th><th>Cantidad</th><th title="Fecha requerida">Requerida</th><th>Estado</th><th title="Ya prorrateado desde la fecha de activación cuando aplica">Precio unitario</th><th>Monto total</th><th title="Fecha de activación">Activación</th><th title="Las licencias son anuales: vence 1 año después de la activación">Vencimiento</th><th>Acción</th></tr></thead><tbody>'+rows+'</tbody></table></div>') +
     '</div>';
   }
@@ -2499,54 +2402,9 @@
       showToast('Cuenta eliminada.', 'success');
     },
 
-    setReportQuick: function(key){ var qd = quickRangeDates(key); reportFilter.quick = key; reportFilter.from = qd.from; reportFilter.to = qd.to; reportPicker.open=false; saveUiState(); render(); },
-    toggleDatePicker: function(){
-      reportPicker.open = !reportPicker.open;
-      if(reportPicker.open){
-        reportPicker.cursor = (reportFilter.from || todayYmd()).slice(0,7);
-        reportPicker.step = (reportFilter.from && !reportFilter.to) ? 'to' : 'from';
-      }
-      render();
-    },
-    closeDatePicker: function(){ reportPicker.open = false; render(); },
-    pickerNav: function(dir){
-      var p = reportPicker.cursor.split('-'); var y=Number(p[0]), m=Number(p[1])-1;
-      var d = new Date(y, m+dir, 1);
-      reportPicker.cursor = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
-      render();
-    },
-    pickReportDate: function(ymd){
-      if(reportPicker.step==='from' || !reportFilter.from){
-        reportFilter.quick = null; reportFilter.from = ymd; reportFilter.to = null;
-        reportPicker.step = 'to';
-        render();
-      } else if(ymd < reportFilter.from){
-        reportFilter.from = ymd; reportFilter.to = null;
-        render();
-      } else {
-        reportFilter.to = ymd;
-        reportPicker.step = 'from';
-        reportPicker.open = false;
-        saveUiState(); render();
-      }
-    },
-    clearReportRange: function(){
-      reportFilter.quick = null; reportFilter.from = null; reportFilter.to = null;
-      reportPicker.step = 'from';
-      saveUiState(); render();
-    },
-    reportRangeToday: function(){
-      var t = todayYmd();
-      reportFilter.quick = null; reportFilter.from = t; reportFilter.to = t;
-      reportPicker.open = false; reportPicker.step = 'from';
-      saveUiState(); render();
-    },
     setReportFilter: function(k,v){ reportFilter[k]=v; saveUiState(); render(); },
     exportReport: function(){
       var list = STATE.requests.filter(function(r){
-        var reqDate = dateOnly(r.requestedAt);
-        if(reportFilter.from && reqDate < reportFilter.from) return false;
-        if(reportFilter.to && reqDate > reportFilter.to) return false;
         if(reportFilter.cliente!=='todos' && r.clientUsername!==reportFilter.cliente) return false;
         if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
         if(reportFilter.tipo!=='todos' && r.licenseTypeId!==reportFilter.tipo) return false;
@@ -2563,7 +2421,7 @@
       lines.push('');
       lines.push(['Total solicitudes', list.length].map(csvField).join(';'));
       lines.push(['Monto aprobado', totalAprobado.toFixed(2)].map(csvField).join(';'));
-      var fname = 'reporte_licencias_'+(reportFilter.from||'inicio')+'_a_'+(reportFilter.to||'fin')+'.csv';
+      var fname = 'reporte_licencias_'+todayYmd()+'.csv';
       downloadCsv(fname, lines.join('\n'));
     }
   };
