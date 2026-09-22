@@ -2457,59 +2457,8 @@
       wb.creator = 'Portal de Licencias — Moventi';
       wb.created = new Date();
 
-      /* ---------- Hoja 1: Resumen ---------- */
-      var rs = wb.addWorksheet('Resumen', { views:[{ showGridLines:false }] });
-      rs.columns = [{width:34},{width:22},{width:22},{width:22}];
-
-      rs.mergeCells('A1:D1');
-      rs.getCell('A1').value = 'Reporte de Licencias';
-      rs.getCell('A1').font = { bold:true, size:16, color:{argb:C.dark} };
-
-      rs.mergeCells('A2:D2');
-      rs.getCell('A2').value = 'Cliente: '+clienteLabel+'  ·  Estado: '+estadoLabel+'  ·  Tipo: '+tipoLabel+'  ·  Proyecto: '+proyectoLabel;
-      rs.getCell('A2').font = { size:10, color:{argb:C.gray} };
-
-      rs.mergeCells('A3:D3');
-      rs.getCell('A3').value = 'Generado: '+generadoEl;
-      rs.getCell('A3').font = { size:10, italic:true, color:{argb:C.gray} };
-
-      rs.getCell('A5').value = 'Total de solicitudes';
-      rs.getCell('A5').font = { bold:true, color:{argb:C.dark} };
-      rs.getCell('B5').value = list.length;
-      rs.getCell('B5').alignment = { horizontal:'right' };
-
-      rs.getCell('A6').value = 'Licencias aprobadas / vigentes';
-      rs.getCell('A6').font = { bold:true, color:{argb:C.dark} };
-      rs.getCell('B6').value = aprobadasList.length;
-      rs.getCell('B6').alignment = { horizontal:'right' };
-
-      rs.getCell('A7').value = 'Cantidad total de licencias';
-      rs.getCell('A7').font = { bold:true, color:{argb:C.dark} };
-      rs.getCell('B7').value = totalLicencias;
-      rs.getCell('B7').alignment = { horizontal:'right' };
-
-      rs.mergeCells('A9:B9');
-      rs.getCell('A9').value = 'MONTO TOTAL (US$)';
-      rs.mergeCells('C9:D9');
-      rs.getCell('C9').value = totalAprobado;
-      rs.getCell('C9').numFmt = MONEY_FMT;
-      ['A9','B9','C9','D9'].forEach(function(ref){
-        rs.getCell(ref).fill = { type:'pattern', pattern:'solid', fgColor:{argb:C.teal} };
-        rs.getCell(ref).font = { bold:true, size:14, color:{argb:C.white} };
-      });
-      rs.getCell('A9').alignment = { vertical:'middle' };
-      rs.getCell('C9').alignment = { vertical:'middle', horizontal:'right' };
-      rs.getRow(9).height = 26;
-
-      rs.mergeCells('A11:D13');
-      rs.getCell('A11').value = 'Este es el valor a utilizar del reporte: ya incluye el prorrateo de las '+
-        'licencias activadas dentro del mes en curso (precio de lista / 30 x días restantes). '+
-        'Corresponde exactamente a la suma de la columna "Monto total (US$)" de la hoja Detalle.';
-      rs.getCell('A11').font = { size:10, italic:true, color:{argb:C.gray} };
-      rs.getCell('A11').alignment = { wrapText:true, vertical:'top' };
-
-      /* ---------- Hoja 2: Detalle ---------- */
-      var ws = wb.addWorksheet('Detalle', { views:[{ state:'frozen', ySplit:1 }] });
+      /* ---------- Una sola hoja: encabezado + tabla + total ---------- */
+      var ws = wb.addWorksheet('Reporte', { views:[{ showGridLines:false }] });
       var cols = [
         {header:'Fecha de solicitud', key:'fsol', width:14},
         {header:'Cliente', key:'cli', width:26},
@@ -2524,25 +2473,68 @@
         {header:'Fecha de vencimiento', key:'fven', width:16},
         {header:'Gestionado por', key:'gest', width:20}
       ];
-      ws.columns = cols;
+      var N = cols.length;
       var MONTO_COL = 9; // índice 1-based de "MONTO TOTAL (US$)"
+      var lastColLetter = String.fromCharCode(64+N); // 'L'
 
-      var headerRow = ws.getRow(1);
-      headerRow.eachCell(function(cell, colNumber){
+      // --- Encabezado del reporte (título, filtros, fecha) ---
+      ws.mergeCells('A1:'+lastColLetter+'1');
+      ws.getCell('A1').value = 'Reporte de Licencias';
+      ws.getCell('A1').font = { bold:true, size:16, color:{argb:C.dark} };
+      ws.getRow(1).height = 22;
+
+      ws.mergeCells('A2:'+lastColLetter+'2');
+      ws.getCell('A2').value = 'Cliente: '+clienteLabel+'  ·  Estado: '+estadoLabel+'  ·  Tipo: '+tipoLabel+'  ·  Proyecto: '+proyectoLabel;
+      ws.getCell('A2').font = { size:10, color:{argb:C.gray} };
+
+      ws.mergeCells('A3:'+lastColLetter+'3');
+      ws.getCell('A3').value = 'Generado: '+generadoEl+'   ·   Total de solicitudes: '+list.length+'   ·   Licencias aprobadas/vigentes: '+aprobadasList.length;
+      ws.getCell('A3').font = { size:10, italic:true, color:{argb:C.gray} };
+
+      // Bloque destacado con el número que importa, arriba de la tabla.
+      ws.mergeCells('A5:'+String.fromCharCode(64+MONTO_COL-1)+'5');
+      ws.getCell('A5').value = 'MONTO TOTAL (US$) — usar este valor (ya prorrateado)';
+      ws.mergeCells(String.fromCharCode(64+MONTO_COL)+'5:'+lastColLetter+'5');
+      ws.getCell(String.fromCharCode(64+MONTO_COL)+'5').value = totalAprobado;
+      ws.getCell(String.fromCharCode(64+MONTO_COL)+'5').numFmt = MONEY_FMT;
+      for(var cc=1; cc<=N; cc++){
+        var cell5 = ws.getRow(5).getCell(cc);
+        cell5.fill = { type:'pattern', pattern:'solid', fgColor:{argb:C.teal} };
+        cell5.font = { bold:true, size:13, color:{argb:C.white} };
+      }
+      ws.getCell('A5').alignment = { vertical:'middle' };
+      ws.getCell(String.fromCharCode(64+MONTO_COL)+'5').alignment = { vertical:'middle', horizontal:'right' };
+      ws.getRow(5).height = 24;
+
+      // --- Encabezado de la tabla ---
+      var HEADER_ROW = 7;
+      var headerRow = ws.getRow(HEADER_ROW);
+      cols.forEach(function(col, i){
+        var cell = headerRow.getCell(i+1);
+        cell.value = col.header;
         cell.font = { bold:true, color:{argb:C.white} };
-        cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb: colNumber===MONTO_COL ? C.tealDark : C.dark} };
-        cell.alignment = { vertical:'middle', horizontal: colNumber>=5 && colNumber<=9 ? 'right' : 'left' };
+        cell.fill = { type:'pattern', pattern:'solid', fgColor:{argb: (i+1)===MONTO_COL ? C.tealDark : C.dark} };
+        cell.alignment = { vertical:'middle', horizontal: (i+1)>=5 && (i+1)<=9 ? 'right' : 'left' };
       });
       headerRow.getCell(MONTO_COL).note = 'Valor a utilizar: ya incluye el prorrateo cuando aplica.';
       headerRow.height = 20;
+      cols.forEach(function(col, i){ ws.getColumn(i+1).width = col.width; });
 
       list.forEach(function(r, idx){
-        var row = ws.addRow({
-          fsol: dateOnly(r.requestedAt)||'', cli: r.clientName, tipo: r.licenseTypeName,
-          proy: r.project||'', cant: Number(r.quantity||1), freq: r.neededFrom||'', est: r.status,
-          punit: precioUnitFinal(r), mtotal: montoTotal(r),
-          fact: r.activatedAt||'', fven: fechaVencimiento(r)||'', gest: r.activatedBy||r.notifiedBy||''
-        });
+        var row = ws.getRow(HEADER_ROW+1+idx);
+        row.getCell(1).value = dateOnly(r.requestedAt)||'';
+        row.getCell(2).value = r.clientName;
+        row.getCell(3).value = r.licenseTypeName;
+        row.getCell(4).value = r.project||'';
+        row.getCell(5).value = Number(r.quantity||1);
+        row.getCell(6).value = r.neededFrom||'';
+        row.getCell(7).value = r.status;
+        row.getCell(8).value = precioUnitFinal(r);
+        row.getCell(9).value = montoTotal(r);
+        row.getCell(10).value = r.activatedAt||'';
+        row.getCell(11).value = fechaVencimiento(r)||'';
+        row.getCell(12).value = r.activatedBy||r.notifiedBy||'';
+
         row.getCell(8).numFmt = MONEY_FMT; row.getCell(8).alignment = {horizontal:'right'};
         row.getCell(9).numFmt = MONEY_FMT; row.getCell(9).alignment = {horizontal:'right'};
         row.getCell(9).font = { bold:true, color:{argb:C.tealDark} };
@@ -2554,17 +2546,22 @@
           });
         }
       });
-      ws.autoFilter = { from:{row:1,column:1}, to:{row:1,column:cols.length} };
+      ws.autoFilter = { from:{row:HEADER_ROW,column:1}, to:{row:HEADER_ROW,column:N} };
+      ws.views = [{ state:'frozen', ySplit:HEADER_ROW }];
 
+      var lastDataRow = HEADER_ROW + list.length;
       if(list.length){
-        ws.addRow([]);
-        var totRow = ws.addRow({ fsol:'Total de solicitudes en este reporte', cant:list.length });
+        var totRowNum = lastDataRow + 2;
+        var totRow = ws.getRow(totRowNum);
+        totRow.getCell(1).value = 'Total de solicitudes en este reporte';
+        totRow.getCell(5).value = list.length;
         totRow.getCell(1).font = { bold:true, color:{argb:C.dark} };
         totRow.getCell(5).font = { bold:true };
         totRow.getCell(5).alignment = { horizontal:'right' };
 
-        ws.mergeCells('A'+(totRow.number+1)+':H'+(totRow.number+1));
-        var granRow = ws.getRow(totRow.number+1);
+        var granRowNum = totRowNum+1;
+        ws.mergeCells('A'+granRowNum+':H'+granRowNum);
+        var granRow = ws.getRow(granRowNum);
         granRow.getCell(1).value = 'MONTO TOTAL APROBADO (US$) — usar este valor';
         granRow.getCell(MONTO_COL).value = totalAprobado;
         granRow.getCell(MONTO_COL).numFmt = MONEY_FMT;
