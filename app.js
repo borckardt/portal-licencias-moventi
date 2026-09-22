@@ -1550,7 +1550,7 @@
 
     var totalSolicitudes = list.length;
     var aprobadas = list.filter(esAprobada);
-    var montoAprobado = aprobadas.reduce(function(s,r){ return s + reqTotal(r); }, 0);
+    var montoAprobado = aprobadas.reduce(function(s,r){ return s + montoTotal(r); }, 0);
     var totalLicencias = list.reduce(function(s,r){ return s + Number(r.quantity||1); }, 0);
 
     // Desglose por proyecto/servicio (Ligo-Prod / LigoCloudPlatform /
@@ -1563,7 +1563,7 @@
         project: p,
         count: reqsP.length,
         aprobadas: aprobadasP.length,
-        monto: aprobadasP.reduce(function(s,r){ return s + reqTotal(r); }, 0)
+        monto: aprobadasP.reduce(function(s,r){ return s + montoTotal(r); }, 0)
       };
     });
     var sinProyectoCount = list.filter(function(r){ return !r.project; }).length;
@@ -2417,7 +2417,7 @@
       list.forEach(function(r){
         lines.push([dateOnly(r.requestedAt), r.clientName, r.licenseTypeName, r.project||'', (r.quantity||1), r.neededFrom||'', r.status, precioUnitFinal(r).toFixed(2), montoTotal(r).toFixed(2), r.activatedAt||'', fechaVencimiento(r)||'', r.activatedBy||r.notifiedBy||''].map(csvField).join(';'));
       });
-      var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+reqTotal(r);},0);
+      var totalAprobado = list.filter(esAprobada).reduce(function(s,r){return s+montoTotal(r);},0);
       lines.push('');
       lines.push(['Total solicitudes', list.length].map(csvField).join(';'));
       lines.push(['Monto aprobado', totalAprobado.toFixed(2)].map(csvField).join(';'));
