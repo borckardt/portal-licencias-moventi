@@ -66,6 +66,14 @@
   function ymDe(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
   function mesAnteriorYm(){ var d = new Date(); return ymDe(new Date(d.getFullYear(), d.getMonth()-1, 1)); }
   var reportMonth = mesAnteriorYm();
+  // Una licencia entra en el cierre de un mes solo si ya estaba activa (o
+  // requerida, si aún no se activa) a más tardar en ese mes. Las activadas
+  // después no existían en ese cierre y no se cobran ahí.
+  function entraEnCierre(r){
+    var ym = String(r.activatedAt || r.neededFrom || '').slice(0,7);
+    if(!/^\d{4}-\d{2}$/.test(ym)) return true;
+    return ym <= reportMonth;
+  }
   var solFilter = { cliente: 'todos', estado: 'todos', proyecto: 'todos' };
   var selectedForIngram = new Set();
   var editingRequestId = null;
@@ -1583,6 +1591,7 @@
       if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
       if(reportFilter.tipo!=='todos' && r.licenseTypeId!==reportFilter.tipo) return false;
       if(reportFilter.proyecto!=='todos' && r.project!==reportFilter.proyecto) return false;
+      if(!entraEnCierre(r)) return false;
       return true;
     }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
 
@@ -1650,7 +1659,7 @@
       '<div class="field" style="max-width:250px"><label>Mes de cierre</label><select onchange="App.setReportMonth(this.value)">' +
         opcionesMesCierre() +
       '</select>' +
-      '<p class="hint">Mes cerrado: prorratea las licencias activadas ese mes. En curso: estimado a la fecha de hoy.</p></div>' +
+      '<p class="hint">Muestra las licencias activas hasta ese mes y prorratea las activadas en él. En curso: estimado a la fecha de hoy.</p></div>' +
       '<div class="field"><label>Cliente</label><select onchange="App.setReportFilter(\'cliente\', this.value)">' +
         '<option value="todos">Todos</option>' + clients.map(function(c){ return '<option value="'+c.username+'" '+(reportFilter.cliente===c.username?'selected':'')+'>'+esc(c.name)+'</option>'; }).join('') +
       '</select></div>' +
@@ -2452,6 +2461,7 @@
         if(reportFilter.estado!=='todos' && r.status!==reportFilter.estado) return false;
         if(reportFilter.tipo!=='todos' && r.licenseTypeId!==reportFilter.tipo) return false;
         if(reportFilter.proyecto!=='todos' && r.project!==reportFilter.proyecto) return false;
+        if(!entraEnCierre(r)) return false;
         return true;
       }).sort(function(a,b){ return a.requestedAt<b.requestedAt?-1:1; });
 
