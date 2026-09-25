@@ -58,6 +58,14 @@
   var adminTab = 'solicitudes';
   var adminAccountState = { busy:false, done:false, error:'' };
   var reportFilter = { cliente: 'todos', estado: 'todos', tipo: 'todos', proyecto: 'todos' };
+  // Mes de cierre del Reporte (AAAA-MM): el prorrateo se calcula contra este
+  // mes y no contra la fecha de hoy. Por defecto es el mes anterior, porque el
+  // cierre se hace los primeros días del mes siguiente (Ingram factura con un
+  // mes de desfase). No se guarda entre sesiones: siempre arranca en el mes
+  // anterior, así nadie cierra por error contra un mes viejo.
+  function ymDe(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+  function mesAnteriorYm(){ var d = new Date(); return ymDe(new Date(d.getFullYear(), d.getMonth()-1, 1)); }
+  var reportMonth = mesAnteriorYm();
   var solFilter = { cliente: 'todos', estado: 'todos', proyecto: 'todos' };
   var selectedForIngram = new Set();
   var editingRequestId = null;
@@ -508,16 +516,17 @@
   // desde la fecha de activación (o la requerida, si aún no se activa) hasta
   // el cierre de ese mes. No se cobra el mes completo si la licencia se pide
   // a mitad de mes.
-  // Solo aplica mientras ese mes sigue vigente (mes/año actual): un mes ya
-  // vencido (ej. agosto cuando ya estamos en septiembre) se cobra completo,
-  // porque el prorrateo ya no tiene sentido una vez que el mes cerró.
+  // Solo aplica en el cierre del mes de activación (el "Mes de cierre" del
+  // Reporte); en los cierres siguientes se cobra el mes completo.
   function prorrateo(r){
     if(!esAprobada(r)) return null;
     var ymd = String(r.activatedAt || r.neededFrom || '').slice(0,10);
     var p = ymd.split('-'); if(p.length!==3) return null;
     var anio = +p[0], mes = +p[1], dia = +p[2];
-    var hoy = new Date();
-    if(anio!==hoy.getFullYear() || mes!==(hoy.getMonth()+1)) return null;
+    // Solo se prorratea en el cierre del mes en que se activó la licencia;
+    // en los cierres siguientes ya es un mes completo.
+    var ref = String(reportMonth||'').split('-');
+    if(anio!==+ref[0] || mes!==+ref[1]) return null;
     var diasMes = new Date(anio, mes, 0).getDate();
     var restantes = diasMes - dia + 1;
     var unitario = Number(r.price||0) / 30 * restantes;
@@ -534,7 +543,8 @@
     var pr = prorrateo(r);
     if(!pr) return money(r.price||0);
     var base = r.activatedAt ? '' : ' · estimado sobre fecha requerida (se recalcula al activar)';
-    return '<span title="'+pr.dias+' días restantes de prorrateo'+base+'">'+money(pr.unitario)+'</span>';
+    return '<span title="'+pr.dias+' días restantes de prorrateo'+base+'">'+money(pr.unitario)+'</span>' +
+      '<div class="prorr-tag">Prorrateado · '+pr.dias+' días</div>';
   }
   // Monto total final: precio unitario final (prorrateado o completo) x cantidad.
   function montoTotal(r){ return precioUnitFinal(r) * Number(r.quantity||1); }
@@ -1555,6 +1565,17 @@
     '</div>';
   }
 
+  // Últimos 12 meses + el mes en curso (para el estimado a una fecha).
+  function opcionesMesCierre(){
+    var nombres = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    var hoy = new Date(), out = '';
+    for(var i=0;i<=12;i++){
+      var d = new Date(hoy.getFullYear(), hoy.getMonth()-i, 1), ym = ymDe(d);
+      var label = nombres[d.getMonth()]+' '+d.getFullYear() + (i===0 ? ' (en curso)' : '');
+      out += '<option value="'+ym+'" '+(ym===reportMonth?'selected':'')+'>'+label+'</option>';
+    }
+    return out;
+  }
   function renderAdminReporte(){
     var clients = STATE.users.filter(function(u){ return u.role==='client'; });
     var list = STATE.requests.filter(function(r){
@@ -1626,6 +1647,10 @@
 
     return '<div class="section-head"><h2>Reporte</h2><p>Consulta todas las licencias vigentes desde su activación, con su precio unitario y su monto.</p></div>' +
     '<div class="toolbar">' +
+      '<div class="field" style="max-width:250px"><label>Mes de cierre</label><select onchange="App.setReportMonth(this.value)">' +
+        opcionesMesCierre() +
+      '</select>' +
+      '<p class="hint">Mes cerrado: prorratea las licencias activadas ese mes. En curso: estimado a la fecha de hoy.</p></div>' +
       '<div class="field"><label>Cliente</label><select onchange="App.setReportFilter(\'cliente\', this.value)">' +
         '<option value="todos">Todos</option>' + clients.map(function(c){ return '<option value="'+c.username+'" '+(reportFilter.cliente===c.username?'selected':'')+'>'+esc(c.name)+'</option>'; }).join('') +
       '</select></div>' +
@@ -2420,6 +2445,7 @@
     },
 
     setReportFilter: function(k,v){ reportFilter[k]=v; saveUiState(); render(); },
+    setReportMonth: function(v){ reportMonth = v; render(); },
     exportReport: async function(){
       var list = STATE.requests.filter(function(r){
         if(reportFilter.cliente!=='todos' && r.clientUsername!==reportFilter.cliente) return false;
@@ -2488,7 +2514,7 @@
       ws.getCell('A2').font = { size:10, color:{argb:C.gray} };
 
       ws.mergeCells('A3:'+lastColLetter+'3');
-      ws.getCell('A3').value = 'Generado: '+generadoEl+'   ·   Total de solicitudes: '+list.length+'   ·   Licencias aprobadas/vigentes: '+aprobadasList.length;
+      ws.getCell('A3').value = 'Mes de cierre: '+reportMonth+'   ·   Generado: '+generadoEl+'   ·   Total de solicitudes: '+list.length+'   ·   Licencias aprobadas/vigentes: '+aprobadasList.length;
       ws.getCell('A3').font = { size:10, italic:true, color:{argb:C.gray} };
 
       // Bloque destacado con el número que importa, arriba de la tabla.
@@ -2574,7 +2600,7 @@
       }
 
       var buf = await wb.xlsx.writeBuffer();
-      var fname = 'reporte_licencias_'+todayYmd()+'.xlsx';
+      var fname = 'reporte_licencias_cierre_'+reportMonth+'.xlsx';
       downloadBinary(fname, buf, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     }
   };
