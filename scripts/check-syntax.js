@@ -6,8 +6,8 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const files = ['app.js'];
-for (const dir of ['api', 'lib']) {
+const files = ['app.js', 'node-server.js'];
+for (const dir of ['api', 'lib', 'scripts']) {
   for (const f of fs.readdirSync(path.join(root, dir))) {
     if (f.endsWith('.js')) files.push(path.join(dir, f));
   }
