@@ -2266,7 +2266,7 @@
         // Outside the Claude artifact runtime there's no connected Gmail via
         // Claude — but if this build is hosted with the /api/send-email
         // backend (see portal-licencias-vercel/api/send-email.js), try that
-        // first for true automatic sending before falling back to mailto.
+        // first. There is no mailto fallback: sending only happens from the platform.
         try{
           var apiResp = await fetch('/api/send-email', {
             method: 'POST',
@@ -2286,26 +2286,26 @@
             showToast('Correo enviado (' + items.length + ' solicitud' + (items.length===1?'':'es') + ').', 'success');
             return;
           }
-          console.warn('send-email API respondió con error, usando mailto como respaldo', await apiResp.text().catch(function(){return '';}));
+          // El envío se hace SOLO desde la plataforma: si el backend falla no
+          // se abre el cliente de correo del admin ni se marca como enviado.
+          var errInfo = await apiResp.json().catch(function(){ return {}; });
+          console.error('send-email fallo:', errInfo);
+          var errCode = errInfo && errInfo.error;
+          if(errCode==='gmail_send_failed'){
+            showToast('No se pudo enviar: Gmail rechazó el acceso del buzón remitente. Revisa GMAIL_SENDER_EMAIL / GMAIL_APP_PASSWORD en Vercel.', 'error');
+          }else if(errCode==='missing_env'){
+            showToast('No se pudo enviar: falta configurar el correo remitente en Vercel.', 'error');
+          }else if(errCode==='recipient_not_allowed'){
+            showToast('No se pudo enviar: destinatario no permitido (' + ((errInfo.blocked||[]).join(', ')) + ').', 'error');
+          }else{
+            showToast('No se pudo enviar el correo. Intenta de nuevo en unos minutos.', 'error');
+          }
+          return;
         }catch(e){
-          // No backend disponible en este hosting (p.ej. dentro del artifact de Claude) — seguimos con mailto.
+          console.error('send-email no disponible:', e);
+          showToast('No se pudo conectar con el servicio de correo. Intenta de nuevo en unos minutos.', 'error');
+          return;
         }
-
-        // Fallback: abrir el cliente de correo del administrador con el mensaje prefijado.
-        var mailto = 'mailto:' + encodeURIComponent(ingramEmail) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body) +
-          (ccList.length ? '&cc=' + encodeURIComponent(ccList.join(',')) : '');
-        window.location.href = mailto;
-        commit(function(s){
-          s.requests.forEach(function(r){
-            if(ids.indexOf(r.id)>-1 && puedeEnviarse(r)){
-              r.notifiedToIngram = true; r.notifiedAt = new Date().toISOString(); r.notifiedBy = admin ? admin.name : null; r.status = 'en proceso';
-            }
-          });
-        });
-        selectedForIngram.clear();
-        render();
-        showToast('Se abrió tu cliente de correo con el mensaje listo — revisa y presiona enviar ahí.', 'info');
-        return;
       }
 
       try{
