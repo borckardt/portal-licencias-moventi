@@ -60,3 +60,11 @@ portal-licencias-vercel/
 ## Desplegar cambios
 
 Este proyecto se sube a GitHub (`borckardt/portal-licencias-moventi`, privado) y Vercel lo redespliega automáticamente en cada push a `main`. Ver `SETUP_GMAIL.md` para la configuración del envío automático de correo por Gmail.
+
+## Despliegue fuera de Vercel (AWS o local)
+
+`node-server.js` corre el mismo portal con Node/Express en cualquier servidor, y
+`lib/store.js` guarda los datos en Amazon S3, en Vercel Blob o en archivos
+locales según `STORAGE_DRIVER`. Para trabajar en local: `npm install` y
+`npm run dev`. Guía completa de AWS (S3 + Elastic Beanstalk + CloudFront,
+migración de datos y verificación): **[DEPLOY_AWS.md](DEPLOY_AWS.md)**.

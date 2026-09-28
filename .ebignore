@@ -1,0 +1,13 @@
+# Lo que la EB CLI (eb deploy) NO sube. El zip de "npm run build:aws" ya
+# excluye todo esto por su cuenta.
+.git/
+.github/
+.vercel/
+.kilo/
+.env
+.env.*
+node_modules/
+data/
+dist/
+backup/
+test/

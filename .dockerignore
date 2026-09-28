@@ -1,0 +1,13 @@
+.git
+.github
+.vercel
+.kilo
+.env
+.env.*
+!.env.example
+node_modules
+data
+dist
+backup
+test
+*.md

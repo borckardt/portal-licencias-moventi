@@ -2,9 +2,27 @@
   "name": "portal-licencias-moventi",
   "version": "1.0.0",
   "private": true,
-  "description": "Portal de licencias Moventi - sitio estatico (Vercel)",
+  "description": "Portal de licencias Moventi (Vercel o AWS vía node-server.js)",
+  "main": "node-server.js",
+  "scripts": {
+    "start": "node node-server.js",
+    "dev": "node node-server.js",
+    "check": "node scripts/check-syntax.js",
+    "test": "node --test test/*.test.js",
+    "build:aws": "node scripts/build-aws-zip.js",
+    "migrate:blob-to-s3": "node scripts/migrate-blob-to-s3.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1142.0",
     "@vercel/blob": "^2.8.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.3",
     "nodemailer": "^6.9.15"
+  },
+  "devDependencies": {
+    "archiver": "^7.0.1"
   }
 }
