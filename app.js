@@ -2290,20 +2290,11 @@
           // se abre el cliente de correo del admin ni se marca como enviado.
           var errInfo = await apiResp.json().catch(function(){ return {}; });
           console.error('send-email fallo:', errInfo);
-          var errCode = errInfo && errInfo.error;
-          if(errCode==='gmail_send_failed'){
-            showToast('No se pudo enviar: Gmail rechazó el acceso del buzón remitente. Revisa GMAIL_SENDER_EMAIL / GMAIL_APP_PASSWORD en Vercel.', 'error');
-          }else if(errCode==='missing_env'){
-            showToast('No se pudo enviar: falta configurar el correo remitente en Vercel.', 'error');
-          }else if(errCode==='recipient_not_allowed'){
-            showToast('No se pudo enviar: destinatario no permitido (' + ((errInfo.blocked||[]).join(', ')) + ').', 'error');
-          }else{
-            showToast('No se pudo enviar el correo. Intenta de nuevo en unos minutos.', 'error');
-          }
+          showToast('Algo salió mal y el correo no se envió. Intenta de nuevo en unos minutos.', 'error');
           return;
         }catch(e){
           console.error('send-email no disponible:', e);
-          showToast('No se pudo conectar con el servicio de correo. Intenta de nuevo en unos minutos.', 'error');
+          showToast('Algo salió mal y el correo no se envió. Intenta de nuevo en unos minutos.', 'error');
           return;
         }
       }
